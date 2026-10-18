@@ -58,6 +58,7 @@ const IntSetting kImageIntSettings[] = {
 
 const FloatSetting kImageFloatSettings[] = {
     {"Sharpening", &Config::sharpening, 0.0f, 1.0f},
+    {"Bloom", &Config::bloom, 0.0f, 1.0f},
 };
 
 const IntSetting kWaterIntSettings[] = {

@@ -19,6 +19,17 @@ constexpr int kBlendedLow = 40;
 constexpr int kBlendedHigh = 216;
 constexpr LONG kEdgeBand = 3;
 constexpr float kBlendedRowsAtLeast = 0.5f;
+constexpr int kBloomGround = 96;
+constexpr int kBelowThresholdGrey = 176;
+constexpr int kSpotWhite = 255;
+constexpr LONG kSpotHalf = 8;
+constexpr LONG kPatchInset = 40;
+constexpr LONG kPatchSize = 160;
+constexpr LONG kNearHalo = 8;
+constexpr LONG kWideHalo = 48;
+constexpr int kNearHaloAtLeast = 4;
+constexpr float kHalfBloom = 0.5f;
+constexpr float kFullBloom = 1.0f;
 
 using FillWorld = void (*)(IDirect3DDevice9*, const D3DVIEWPORT9&);
 
@@ -32,6 +43,7 @@ struct SharpenedFrame
 
     unsigned Draws() const { return after.sharpened - before.sharpened; }
     unsigned Smoothings() const { return after.smoothed - before.smoothed; }
+    unsigned Blooms() const { return after.bloomed - before.bloomed; }
 };
 
 LONG RampStart(const D3DVIEWPORT9& world)
@@ -69,8 +81,29 @@ void FillStairs(IDirect3DDevice9* dev, const D3DVIEWPORT9& world)
         const LONG edge = StairEdge(world, y);
         forever_look_checks::ClearRect(dev, static_cast<LONG>(world.X), y, edge, y + 1,
                                        D3DCOLOR_XRGB(kStairDark, kStairDark, kStairDark));
-        forever_look_checks::ClearRect(dev, edge, y, right, y + 1, D3DCOLOR_XRGB(kStairLight, kStairLight, kStairLight));
+        forever_look_checks::ClearRect(dev, edge, y, right, y + 1,
+                                       D3DCOLOR_XRGB(kStairLight, kStairLight, kStairLight));
     }
+}
+
+POINT SpotCentre(const D3DVIEWPORT9& world)
+{
+    return {static_cast<LONG>(world.X + world.Width / 2), static_cast<LONG>(world.Y + world.Height / 2)};
+}
+
+void FillBrightSpot(IDirect3DDevice9* dev, const D3DVIEWPORT9& world)
+{
+    const LONG left = static_cast<LONG>(world.X);
+    const LONG top = static_cast<LONG>(world.Y);
+    forever_look_checks::ClearRect(dev, left, top, left + static_cast<LONG>(world.Width),
+                                   top + static_cast<LONG>(world.Height),
+                                   D3DCOLOR_XRGB(kBloomGround, kBloomGround, kBloomGround));
+    forever_look_checks::ClearRect(dev, left + kPatchInset, top + kPatchInset, left + kPatchInset + kPatchSize,
+                                   top + kPatchInset + kPatchSize,
+                                   D3DCOLOR_XRGB(kBelowThresholdGrey, kBelowThresholdGrey, kBelowThresholdGrey));
+    const POINT spot = SpotCentre(world);
+    forever_look_checks::ClearRect(dev, spot.x - kSpotHalf, spot.y - kSpotHalf, spot.x + kSpotHalf, spot.y + kSpotHalf,
+                                   D3DCOLOR_XRGB(kSpotWhite, kSpotWhite, kSpotWhite));
 }
 
 SharpenedFrame RenderImageFrame(Harness& h, const D3DVIEWPORT9& world, const Config& cfg, FillWorld fill,
@@ -109,6 +142,16 @@ SharpenedFrame RenderSharpenedFrame(Harness& h, const D3DVIEWPORT9& world, float
     Config cfg = {};
     cfg.sharpening = sharpening;
     return RenderImageFrame(h, world, cfg, &FillSoftEdge, worldDone);
+}
+
+SharpenedFrame RenderBloom(Harness& h, const D3DVIEWPORT9& world, float bloom, bool antialiasing = false,
+                           float sharpening = 0.0f)
+{
+    Config cfg = {};
+    cfg.bloom = bloom;
+    cfg.antialiasing = antialiasing;
+    cfg.sharpening = sharpening;
+    return RenderImageFrame(h, world, cfg, &FillBrightSpot, true);
 }
 
 SharpenedFrame RenderStairs(Harness& h, const D3DVIEWPORT9& world, bool antialiasing, float sharpening)
@@ -248,6 +291,59 @@ void CheckAntialiasing(Harness& h, const D3DVIEWPORT9& world)
     vf_test_set_config(&defaults);
 }
 
+int HaloLift(const Image& image, const D3DVIEWPORT9& world, LONG distance)
+{
+    const POINT spot = SpotCentre(world);
+    return GreyAt(image, spot.x + kSpotHalf + distance, spot.y) - kBloomGround;
+}
+
+bool BloomFlatsKept(const Image& image, const D3DVIEWPORT9& world)
+{
+    const LONG patchCentre = kPatchInset + kPatchSize / 2;
+    const LONG farX = static_cast<LONG>(world.X + world.Width) - kPatchInset;
+    const LONG farY = static_cast<LONG>(world.Y + world.Height) - kPatchInset;
+    return GreyAt(image, static_cast<LONG>(world.X) + patchCentre, static_cast<LONG>(world.Y) + patchCentre) ==
+               kBelowThresholdGrey &&
+           GreyAt(image, farX, farY) == kBloomGround;
+}
+
+void CheckBloom(Harness& h, const D3DVIEWPORT9& world)
+{
+    const SharpenedFrame off = RenderBloom(h, world, 0.0f);
+    const SharpenedFrame half = RenderBloom(h, world, kHalfBloom);
+    const SharpenedFrame full = RenderBloom(h, world, kFullBloom);
+    const SharpenedFrame all = RenderBloom(h, world, kHalfBloom, true, kHalfSharpening);
+    const SharpenedFrame offAgain = RenderBloom(h, world, 0.0f);
+    std::printf("     bright spot halo %ld and %ld px out: off %d %d, bloom 0.5 %d %d, 1 %d %d, with SMAA and "
+                "sharpening %d %d; draws %u %u %u, float levels %d\n",
+                kNearHalo, kWideHalo, HaloLift(off.image, world, kNearHalo), HaloLift(off.image, world, kWideHalo),
+                HaloLift(half.image, world, kNearHalo), HaloLift(half.image, world, kWideHalo),
+                HaloLift(full.image, world, kNearHalo), HaloLift(full.image, world, kWideHalo),
+                HaloLift(all.image, world, kNearHalo), HaloLift(all.image, world, kWideHalo), half.Blooms(),
+                full.Blooms(), all.Blooms(), half.after.floatBloom ? 1 : 0);
+    Check(off.Blooms() == 0 && HaloLift(off.image, world, kNearHalo) == 0,
+          "without bloom the ground beside a bright spot keeps its grey");
+    Check(half.Blooms() == 1 && half.status.drawn && HaloLift(half.image, world, kNearHalo) >= kNearHaloAtLeast &&
+              HaloLift(half.image, world, kWideHalo) > 0 &&
+              HaloLift(full.image, world, kNearHalo) > HaloLift(half.image, world, kNearHalo),
+          "bloom at the frame end puts a halo that fades with distance around a bright spot, stronger at 1 than at "
+          "0.5");
+    Check(BloomFlatsKept(half.image, world) && BloomFlatsKept(full.image, world) && OutsideKept(full.image, world),
+          "bloom leaves areas below its threshold, ground far from the spot and everything outside the world viewport "
+          "unchanged");
+    Check(half.statesKept && all.statesKept,
+          "bloom, alone and after SMAA and sharpening, restores render, blend, sampler, texture, shader, pixel "
+          "constant, stream, viewport, scissor, render target and depth state");
+    Check(all.Blooms() == 1 && all.Smoothings() == 1 && all.Draws() == 1 &&
+              HaloLift(all.image, world, kNearHalo) >= kNearHaloAtLeast,
+          "with SMAA and sharpening on as well, the halo is added after them in the same frame-end pass");
+    Check(offAgain.Blooms() == 0 && !offAgain.after.holdsBloomTargets && !offAgain.after.holdsSceneCopy &&
+              SameImage(off.image, offAgain.image),
+          "Bloom=0 draws nothing, leaves the frame as it was and releases the bloom levels");
+    Config defaults = {};
+    vf_test_set_config(&defaults);
+}
+
 void CheckShippedSetting(const std::wstring& shippedIni)
 {
     Config defaults = {};
@@ -257,5 +353,7 @@ void CheckShippedSetting(const std::wstring& shippedIni)
           "sharpening is off by default and in the shipped INI");
     Check(!defaults.antialiasing && GetPrivateProfileIntW(L"CoAVolFog", L"Antialiasing", -1, shippedIni.c_str()) == 0,
           "SMAA antialiasing is off by default and in the shipped INI");
+    GetPrivateProfileStringW(L"CoAVolFog", L"Bloom", L"", text, 16, shippedIni.c_str());
+    Check(defaults.bloom == 0.0f && std::wcscmp(text, L"0") == 0, "bloom is off by default and in the shipped INI");
 }
 }

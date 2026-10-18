@@ -6,16 +6,20 @@ struct ImageSettings
 {
     bool antialiasing = false;
     float sharpening = 0.0f;
+    float bloom = 0.0f;
 
-    bool Any() const { return antialiasing || sharpening > 0.0f; }
+    bool Any() const { return antialiasing || sharpening > 0.0f || bloom > 0.0f; }
 };
 
 struct ImageStats
 {
     unsigned smoothed = 0;
     unsigned sharpened = 0;
+    unsigned bloomed = 0;
     bool holdsSceneCopy = false;
     bool holdsAntialiasingTargets = false;
+    bool holdsBloomTargets = false;
+    bool floatBloom = false;
     bool linearBlend = false;
 };
 
@@ -34,6 +38,7 @@ public:
 
 private:
     static constexpr DWORD kRenderTargets = 4;
+    static constexpr int kBloomLevels = 5;
 
     struct BoundTargets
     {
@@ -54,6 +59,7 @@ private:
     bool EnsureStateBlock(IDirect3DDevice9* dev);
     bool EnsureLookupTextures(IDirect3DDevice9* dev);
     bool EnsureViewTexture(IDirect3DDevice9* dev, ViewTexture& view, D3DFORMAT format, UINT width, UINT height);
+    bool EnsureBloomTargets(IDirect3DDevice9* dev, const D3DVIEWPORT9& world, bool wanted);
     bool EnsureTargets(IDirect3DDevice9* dev, D3DFORMAT format, const D3DVIEWPORT9& world,
                        const ImageSettings& settings);
     bool CopyWorld(IDirect3DDevice9* dev, IDirect3DSurface9* target, const D3DVIEWPORT9& world);
@@ -68,6 +74,11 @@ private:
                                   bool intoTexture);
     void Sharpen(IDirect3DDevice9* dev, const BoundTargets& bound, const D3DVIEWPORT9& world,
                  IDirect3DBaseTexture9* source, float strength);
+    void DrawBloomPass(IDirect3DDevice9* dev, IDirect3DPixelShader9* shader, const ViewTexture& source,
+                       const ViewTexture& target);
+    void BuildBloom(IDirect3DDevice9* dev);
+    void CompositeBloom(IDirect3DDevice9* dev, const BoundTargets& bound, const D3DVIEWPORT9& world, float strength);
+    void ReleaseBloomTargets();
     void ReleaseViewTexture(ViewTexture& view);
 
     IDirect3DVertexShader9* m_vs = nullptr;
@@ -75,6 +86,10 @@ private:
     IDirect3DPixelShader9* m_edgesPs = nullptr;
     IDirect3DPixelShader9* m_weightsPs = nullptr;
     IDirect3DPixelShader9* m_blendPs = nullptr;
+    IDirect3DPixelShader9* m_bloomPrefilterPs = nullptr;
+    IDirect3DPixelShader9* m_bloomDownPs = nullptr;
+    IDirect3DPixelShader9* m_bloomUpPs = nullptr;
+    IDirect3DPixelShader9* m_bloomCompositePs = nullptr;
     IDirect3DVertexDeclaration9* m_decl = nullptr;
     IDirect3DStateBlock9* m_state = nullptr;
     IDirect3DTexture9* m_area = nullptr;
@@ -83,11 +98,14 @@ private:
     ViewTexture m_edges;
     ViewTexture m_weights;
     ViewTexture m_smoothed;
+    ViewTexture m_bloom[kBloomLevels];
+    D3DFORMAT m_bloomFormat = D3DFMT_UNKNOWN;
     bool m_linearBlend = false;
     bool m_targetsFailed = false;
     bool m_lookupFailed = false;
     IDirect3DDevice9* m_unsupportedDevice = nullptr;
     unsigned m_smoothedCount = 0;
     unsigned m_sharpenedCount = 0;
+    unsigned m_bloomedCount = 0;
     const char* m_skip = "";
 };

@@ -48,11 +48,11 @@ are compiled with `fxc`. `README.md` holds the design and the reverse-engineerin
   client's `waterRipples` splash and wake sprites), `water_renderer` (copies, stencil tagging, shading); look:
   `forever_look` (Forever glow byte before the fog composite, grading decisions at world done and frame end),
   `grading_renderer` (colour grading pass); image: `image_quality` (world viewport at world done, the pass at frame
-  end), `image_renderer` (SMAA and sharpening passes).
+  end), `image_renderer` (SMAA, sharpening and bloom passes).
 - `shaders/` — the ps_3_0 passes: `vf_*` fog (march, temporal, composite and its multisampled silhouette split, god
   rays and their late composite after an early one, depth probe and depth-copy check), `vw_*` water (FFT, ripple step,
-  depth copy, shading), `vp_grade` (colour grading), `vp_smaa_*` (SMAA edges, weights and blend) and `vp_sharpen`
-  (sharpening).
+  depth copy, shading), `vp_grade` (colour grading), `vp_smaa_*` (SMAA edges, weights and blend), `vp_sharpen`
+  (sharpening) and `vp_bloom_*` (bloom threshold, levels and composite).
 - `tests/harness.cpp` — the offline D3D9 harness; `--scene harbour` renders a logged in-game frame, `--scene ripples`
   units wading through the basin. `tests/shaders/` holds a copy of the client's M2 fog shader for the transparent fog
   checks.

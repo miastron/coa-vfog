@@ -64,6 +64,7 @@ struct Config
     int anisotropicFiltering = 16;
     bool antialiasing = false;
     float sharpening = 0.0f;
+    float bloom = 0.0f;
     float farClipMax = kFarClipMaxKeepsClientCap;
     float maxDistance = 5000.0f;
     float temporal = 0.85f;

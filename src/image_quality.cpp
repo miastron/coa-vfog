@@ -26,7 +26,9 @@ ImageQualityStatus g_status;
 
 int ImageQualityFilter(unsigned code, const char* where)
 {
-    VF_LOG_ERROR("exception 0x%08X in %s; antialiasing and sharpening are off for this session, the fog continues", code, where);
+    VF_LOG_ERROR("exception 0x%08X in %s; antialiasing, sharpening and bloom are off for this session, the fog "
+                 "continues",
+                 code, where);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -41,7 +43,7 @@ void Record(bool drawn, const char* state)
     }
     const StatusLogLine line = g_log.Skip(state);
     if (line.write)
-        LogWrite(line.level, "antialiasing and sharpening skipped: %s", state);
+        LogWrite(line.level, "antialiasing, sharpening and bloom skipped: %s", state);
 }
 
 void ReleaseWhenOff(FogDevice* current)
@@ -82,6 +84,7 @@ ImageSettings ImageSettingsOf(const Config& cfg)
         return settings;
     settings.antialiasing = cfg.antialiasing;
     settings.sharpening = cfg.sharpening;
+    settings.bloom = cfg.bloom;
     return settings;
 }
 

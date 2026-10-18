@@ -5,6 +5,10 @@
 
 #include "AreaTex.h"
 #include "SearchTex.h"
+#include "ps_bloom_composite.h"
+#include "ps_bloom_down.h"
+#include "ps_bloom_prefilter.h"
+#include "ps_bloom_up.h"
 #include "ps_sharpen.h"
 #include "ps_smaa_blend.h"
 #include "ps_smaa_edges.h"
@@ -15,17 +19,23 @@
 
 namespace
 {
-constexpr UINT kImageConstants = 3;
+constexpr UINT kImageConstants = 4;
 constexpr DWORD kImageStages = 3;
 constexpr DWORD kSceneStage = 0;
 constexpr DWORD kEdgesStage = 0;
 constexpr DWORD kAreaStage = 1;
 constexpr DWORD kSearchStage = 2;
 constexpr DWORD kWeightsStage = 1;
+constexpr DWORD kBloomStage = 0;
 constexpr UINT kOriginRegister = 0;
 constexpr UINT kMetricsRegister = 1;
 constexpr UINT kSettingsRegister = 2;
+constexpr UINT kBloomTexelsRegister = 3;
 constexpr D3DFORMAT kAntialiasingTargetFormat = D3DFMT_A8R8G8B8;
+constexpr D3DFORMAT kFloatBloomFormat = D3DFMT_A16B16G16R16F;
+constexpr D3DFORMAT kFixedBloomFormat = D3DFMT_A8R8G8B8;
+constexpr DWORD kFloatBloomUsage =
+    D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_QUERY_FILTER;
 constexpr D3DCOLOR kNoEdges = 0;
 constexpr DWORD kColourChannels = D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE;
 constexpr DWORD kAllChannels = kColourChannels | D3DCOLORWRITEENABLE_ALPHA;
@@ -45,6 +55,9 @@ const RenderStateValue kImageRenderStates[] = {
     {D3DRS_ALPHATESTENABLE, FALSE},
     {D3DRS_ALPHABLENDENABLE, FALSE},
     {D3DRS_SEPARATEALPHABLENDENABLE, FALSE},
+    {D3DRS_SRCBLEND, D3DBLEND_ONE},
+    {D3DRS_DESTBLEND, D3DBLEND_ZERO},
+    {D3DRS_BLENDOP, D3DBLENDOP_ADD},
     {D3DRS_FOGENABLE, FALSE},
     {D3DRS_SRGBWRITEENABLE, FALSE},
     {D3DRS_CULLMODE, D3DCULL_NONE},
@@ -107,22 +120,47 @@ void SetOrigin(IDirect3DDevice9* dev, const D3DVIEWPORT9& viewport)
     dev->SetPixelShaderConstantF(kOriginRegister, origin, 1);
 }
 
-bool SupportsLinearBlend(IDirect3DDevice9* dev, D3DFORMAT format)
+struct FormatUse
+{
+    DWORD usage;
+    D3DRESOURCETYPE type;
+};
+
+template <size_t Count>
+bool SupportsFormat(IDirect3DDevice9* dev, D3DFORMAT format, const FormatUse (&uses)[Count])
 {
     IDirect3D9* d3d = nullptr;
     D3DDEVICE_CREATION_PARAMETERS creation = {};
     D3DDISPLAYMODE mode = {};
     if (FAILED(dev->GetDirect3D(&d3d)) || !d3d)
         return false;
-    const bool known = SUCCEEDED(dev->GetCreationParameters(&creation)) && SUCCEEDED(dev->GetDisplayMode(0, &mode));
-    const bool supported =
-        known &&
-        SUCCEEDED(d3d->CheckDeviceFormat(creation.AdapterOrdinal, creation.DeviceType, mode.Format,
-                                         D3DUSAGE_QUERY_SRGBREAD, D3DRTYPE_TEXTURE, format)) &&
-        SUCCEEDED(d3d->CheckDeviceFormat(creation.AdapterOrdinal, creation.DeviceType, mode.Format,
-                                         D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_SRGBWRITE, D3DRTYPE_SURFACE, format));
+    bool supported = SUCCEEDED(dev->GetCreationParameters(&creation)) && SUCCEEDED(dev->GetDisplayMode(0, &mode));
+    for (const FormatUse& use : uses)
+        supported = supported && SUCCEEDED(d3d->CheckDeviceFormat(creation.AdapterOrdinal, creation.DeviceType,
+                                                                  mode.Format, use.usage, use.type, format));
     d3d->Release();
     return supported;
+}
+
+bool SupportsLinearBlend(IDirect3DDevice9* dev, D3DFORMAT format)
+{
+    const FormatUse uses[] = {
+        {D3DUSAGE_QUERY_SRGBREAD, D3DRTYPE_TEXTURE},
+        {D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_SRGBWRITE, D3DRTYPE_SURFACE},
+    };
+    return SupportsFormat(dev, format, uses);
+}
+
+D3DFORMAT BloomFormat(IDirect3DDevice9* dev)
+{
+    const FormatUse uses[] = {{kFloatBloomUsage, D3DRTYPE_TEXTURE}};
+    return SupportsFormat(dev, kFloatBloomFormat, uses) ? kFloatBloomFormat : kFixedBloomFormat;
+}
+
+UINT BloomExtent(UINT worldExtent, int level)
+{
+    const UINT extent = worldExtent >> (level + 1);
+    return extent ? extent : 1;
 }
 
 template <size_t Size>
@@ -155,6 +193,7 @@ void ImageRenderer::ReleaseDefaultPool()
     ReleaseViewTexture(m_edges);
     ReleaseViewTexture(m_weights);
     ReleaseViewTexture(m_smoothed);
+    ReleaseBloomTargets();
     m_targetsFailed = false;
     SafeRelease(m_state);
 }
@@ -170,8 +209,19 @@ void ImageRenderer::ReleaseAll()
     SafeRelease(m_edgesPs);
     SafeRelease(m_weightsPs);
     SafeRelease(m_blendPs);
+    SafeRelease(m_bloomPrefilterPs);
+    SafeRelease(m_bloomDownPs);
+    SafeRelease(m_bloomUpPs);
+    SafeRelease(m_bloomCompositePs);
     SafeRelease(m_decl);
+    m_bloomFormat = D3DFMT_UNKNOWN;
     m_unsupportedDevice = nullptr;
+}
+
+void ImageRenderer::ReleaseBloomTargets()
+{
+    for (ViewTexture& level : m_bloom)
+        ReleaseViewTexture(level);
 }
 
 ImageStats ImageRenderer::Stats() const
@@ -179,8 +229,11 @@ ImageStats ImageRenderer::Stats() const
     ImageStats stats;
     stats.smoothed = m_smoothedCount;
     stats.sharpened = m_sharpenedCount;
+    stats.bloomed = m_bloomedCount;
     stats.holdsSceneCopy = m_sceneCopy.texture != nullptr;
     stats.holdsAntialiasingTargets = m_edges.texture || m_weights.texture || m_smoothed.texture;
+    stats.holdsBloomTargets = m_bloom[0].texture != nullptr;
+    stats.floatBloom = m_bloomFormat == kFloatBloomFormat;
     stats.linearBlend = m_linearBlend;
     return stats;
 }
@@ -195,7 +248,7 @@ bool ImageRenderer::EnsureShaders(IDirect3DDevice9* dev)
 {
     if (m_unsupportedDevice == dev)
         return Skip("image shaders unsupported");
-    if (m_blendPs)
+    if (m_bloomCompositePs)
         return true;
     static const D3DVERTEXELEMENT9 kElements[] = {
         {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
@@ -211,6 +264,14 @@ bool ImageRenderer::EnsureShaders(IDirect3DDevice9* dev)
     if (SUCCEEDED(result))
         result = dev->CreatePixelShader(reinterpret_cast<const DWORD*>(g_ps_smaa_blend), &m_blendPs);
     if (SUCCEEDED(result))
+        result = dev->CreatePixelShader(reinterpret_cast<const DWORD*>(g_ps_bloom_prefilter), &m_bloomPrefilterPs);
+    if (SUCCEEDED(result))
+        result = dev->CreatePixelShader(reinterpret_cast<const DWORD*>(g_ps_bloom_down), &m_bloomDownPs);
+    if (SUCCEEDED(result))
+        result = dev->CreatePixelShader(reinterpret_cast<const DWORD*>(g_ps_bloom_up), &m_bloomUpPs);
+    if (SUCCEEDED(result))
+        result = dev->CreatePixelShader(reinterpret_cast<const DWORD*>(g_ps_bloom_composite), &m_bloomCompositePs);
+    if (SUCCEEDED(result))
         result = dev->CreateVertexDeclaration(kElements, &m_decl);
     if (SUCCEEDED(result))
         return true;
@@ -219,9 +280,14 @@ bool ImageRenderer::EnsureShaders(IDirect3DDevice9* dev)
     SafeRelease(m_edgesPs);
     SafeRelease(m_weightsPs);
     SafeRelease(m_blendPs);
+    SafeRelease(m_bloomPrefilterPs);
+    SafeRelease(m_bloomDownPs);
+    SafeRelease(m_bloomUpPs);
+    SafeRelease(m_bloomCompositePs);
     SafeRelease(m_decl);
     m_unsupportedDevice = dev;
-    VF_LOG_ERROR("image shaders could not be created (HRESULT 0x%08lX); no antialiasing or sharpening on this device",
+    VF_LOG_ERROR("image shaders could not be created (HRESULT 0x%08lX); no antialiasing, sharpening or bloom on this "
+                 "device",
                  static_cast<unsigned long>(result));
     return Skip("image shaders unsupported");
 }
@@ -299,6 +365,22 @@ bool ImageRenderer::EnsureViewTexture(IDirect3DDevice9* dev, ViewTexture& view, 
     return true;
 }
 
+bool ImageRenderer::EnsureBloomTargets(IDirect3DDevice9* dev, const D3DVIEWPORT9& world, bool wanted)
+{
+    if (!wanted)
+    {
+        ReleaseBloomTargets();
+        return true;
+    }
+    if (m_bloomFormat == D3DFMT_UNKNOWN)
+        m_bloomFormat = BloomFormat(dev);
+    bool created = true;
+    for (int level = 0; level < kBloomLevels; ++level)
+        created = created && EnsureViewTexture(dev, m_bloom[level], m_bloomFormat, BloomExtent(world.Width, level),
+                                               BloomExtent(world.Height, level));
+    return created;
+}
+
 bool ImageRenderer::EnsureTargets(IDirect3DDevice9* dev, D3DFORMAT format, const D3DVIEWPORT9& world,
                                   const ImageSettings& settings)
 {
@@ -322,6 +404,7 @@ bool ImageRenderer::EnsureTargets(IDirect3DDevice9* dev, D3DFORMAT format, const
         ReleaseViewTexture(m_weights);
         ReleaseViewTexture(m_smoothed);
     }
+    created = created && EnsureBloomTargets(dev, world, settings.bloom > 0.0f);
     if (!created)
     {
         ReleaseDefaultPool();
@@ -422,6 +505,53 @@ void ImageRenderer::Sharpen(IDirect3DDevice9* dev, const BoundTargets& bound, co
     ++m_sharpenedCount;
 }
 
+void ImageRenderer::DrawBloomPass(IDirect3DDevice9* dev, IDirect3DPixelShader9* shader, const ViewTexture& source,
+                                  const ViewTexture& target)
+{
+    TargetTexture(dev, target, false);
+    dev->SetPixelShader(shader);
+    Bind(dev, kBloomStage, source.texture, Filter::Linear);
+    const float texels[4] = {1.0f / source.width, 1.0f / source.height, 1.0f / target.width, 1.0f / target.height};
+    dev->SetPixelShaderConstantF(kBloomTexelsRegister, texels, 1);
+    DrawFullscreenTriangle(dev);
+}
+
+void ImageRenderer::BuildBloom(IDirect3DDevice9* dev)
+{
+    dev->SetRenderState(D3DRS_COLORWRITEENABLE, kAllChannels);
+    DrawBloomPass(dev, m_bloomPrefilterPs, m_sceneCopy, m_bloom[0]);
+    for (int level = 1; level < kBloomLevels; ++level)
+        DrawBloomPass(dev, m_bloomDownPs, m_bloom[level - 1], m_bloom[level]);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    for (int level = kBloomLevels - 1; level > 0; --level)
+        DrawBloomPass(dev, m_bloomUpPs, m_bloom[level], m_bloom[level - 1]);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+    dev->SetTexture(kBloomStage, nullptr);
+}
+
+void ImageRenderer::CompositeBloom(IDirect3DDevice9* dev, const BoundTargets& bound, const D3DVIEWPORT9& world,
+                                   float strength)
+{
+    Target(dev, bound.colour[0], world);
+    dev->SetRenderState(D3DRS_COLORWRITEENABLE, kColourChannels);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_INVDESTCOLOR);
+    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    dev->SetPixelShader(m_bloomCompositePs);
+    Bind(dev, kBloomStage, m_bloom[0].texture, Filter::Linear);
+    const float texels[4] = {1.0f / m_bloom[0].width, 1.0f / m_bloom[0].height, 0.0f, 0.0f};
+    dev->SetPixelShaderConstantF(kBloomTexelsRegister, texels, 1);
+    const float settings[4] = {0.0f, strength / kBloomLevels, 0.0f, 0.0f};
+    dev->SetPixelShaderConstantF(kSettingsRegister, settings, 1);
+    DrawFullscreenTriangle(dev);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    ++m_bloomedCount;
+}
+
 void ImageRenderer::DrawPasses(IDirect3DDevice9* dev, const BoundTargets& bound, const D3DVIEWPORT9& world,
                                const ImageSettings& settings)
 {
@@ -436,11 +566,16 @@ void ImageRenderer::DrawPasses(IDirect3DDevice9* dev, const BoundTargets& bound,
     dev->SetDepthStencilSurface(nullptr);
     SetSharedState(dev, world);
     const bool sharpen = settings.sharpening > 0.0f;
+    const bool bloom = settings.bloom > 0.0f;
+    if (bloom)
+        BuildBloom(dev);
     IDirect3DBaseTexture9* sharpenSource = m_sceneCopy.texture;
     if (settings.antialiasing)
         sharpenSource = Smooth(dev, bound, world, sharpen);
     if (sharpen)
         Sharpen(dev, bound, world, sharpenSource, settings.sharpening);
+    if (bloom)
+        CompositeBloom(dev, bound, world, settings.bloom);
     dev->SetRenderTarget(0, bound.colour[0]);
     for (DWORD i = 1; i < kRenderTargets; ++i)
         if (bound.colour[i])

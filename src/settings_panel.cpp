@@ -245,6 +245,10 @@ bool DrawGlowAndGrading(Config& c)
                       "Strength of the modern client's colour curve for the lights around the camera: brighter "
                       "midtones, and the brightest highlights clipped to white. Names, the interface, the ghost view "
                       "and the view under water are not graded. 0 = off");
+    changed |= Slider("Bloom", c.bloom, 0.0f, 1.0f, "%.2f",
+                      "A soft halo of light around the brightest parts of the 3D view (the sun, bright sky, spells "
+                      "and lamps) at the end of the world render, before names and the interface. It adds to the "
+                      "client's own glow. 0 = off");
     return changed;
 }
 
