@@ -6,6 +6,7 @@
 #include "fog_data.h"
 #include "forever_look.h"
 #include "hooks.h"
+#include "image_quality.h"
 #include "log.h"
 #include "noise_volume.h"
 #include "overlay.h"
@@ -526,6 +527,21 @@ extern "C" int __cdecl vf_test_delivered_glow(float* amount)
 extern "C" void __cdecl vf_test_grading_stats(GradingStats* stats)
 {
     *stats = GradingStatsOf(LatestFogDevice());
+}
+
+extern "C" void __cdecl vf_test_image_stats(ImageStats* stats)
+{
+    *stats = ImageStatsOf(LatestFogDevice());
+}
+
+extern "C" void __cdecl vf_test_image_status(ImageQualityStatus* status)
+{
+    *status = LastImageQualityStatus();
+}
+
+extern "C" void __cdecl vf_test_image_world_done()
+{
+    ImageQualityAtWorldDone();
 }
 
 extern "C" int __cdecl vf_test_forever_look_guards(engine::CodeRange* ranges, int capacity)

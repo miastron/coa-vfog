@@ -78,6 +78,8 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
   targets, shadow maps) and point-filtered samplers keep the game's filter, a higher level the game asks for is kept,
   and the level is limited to the device's `MaxAnisotropy`. The DLL's own passes set their samplers on the real
   device and are not affected.
+- **Sharpening** (`Sharpening`, off by default): contrast-adaptive sharpening of the world viewport at the end of
+  the world render, after the colour grading and before names and the interface.
 - **Opt-in** (all off by default): Forever's per-light glow amount (`ForeverGlow`) and colour curve (`ColorGrading`)
   where Classic lights cover the camera, see-through effects fogged at their own distance (`TransparentFog`), and an
   energy-normalised phase for the Classic layers' sun and moon scattering (`ClassicPhase`).
@@ -174,6 +176,13 @@ uses the byte the composite receives, so a glow above 1, which wraps, is compens
 `ColorGrading` passes a copy of the world viewport through the blended 32-entry curve per channel at the end of the
 world render, before names and the interface, writing `lerp(scene, curve(scene), ColorGrading·t)`; the ghost view,
 the view under water and a view without a grading key are left alone.
+
+**Sharpening.** With `Sharpening` above 0 the world viewport captured at the world-done hook is copied at the frame
+end and redrawn through a contrast-adaptive sharpening filter after AMD FidelityFX CAS: from the minimum and maximum
+of the 3×3 neighbourhood, `w = −sqrt(saturate(min(lo, 2 − hi)/hi))/lerp(8, 5, Sharpening)` with `lo` and `hi` the
+cross plus box minima and maxima, and the pixel becomes `(e + w·(b + d + f + h))/(1 + 4w)`. Flat areas stay as they
+are, and edges that already have contrast are sharpened less than soft ones. A frame without a world render is left
+alone; with `Sharpening=0` nothing is drawn and the copy is released.
 
 **Transparent fog.** Fog drawn once after the world gives every see-through effect the fog of the surface behind
 it, where the stock client fogs it by its own distance. With `TransparentFog=1`, above water, the glare and the fog
@@ -867,6 +876,7 @@ its comments describe every key. In the game, `Ctrl+F7` opens the same settings 
 | `ForeverGlow` | 0 | 1 gives the client's glow Forever's per-light amount where Classic lights cover the camera |
 | `ColorGrading` | 0 | Strength 0..1 of Forever's per-light colour curve over the 3D view; 0 = off |
 | `AnisotropicFiltering` | 16 | Anisotropic filtering of the game's mipmapped textures: 0 = the game's own, 2–16 |
+| `Sharpening` | 0 | Contrast-adaptive sharpening of the 3D view, 0..1; 0 = off |
 | `FarClipMax` | 1583 | Continent view distance up to 1583 yd, within `farclip`; 0 keeps Ascension's 791 cap |
 | `MaxDistance` | 5000 | Fog range: sky integration length and the Classic distance-curve scale |
 | `Temporal` | 0.85 | History weight, 0 = off |

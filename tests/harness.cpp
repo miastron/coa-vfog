@@ -8,6 +8,7 @@
 #include "fullscreen_triangle.h"
 #include "gpu_timing.h"
 #include "grading_renderer.h"
+#include "image_quality.h"
 #include "local_light_stabiliser.h"
 #include "log.h"
 #include "msaa_depth.h"
@@ -116,6 +117,9 @@ extern "C" __declspec(dllimport) void __cdecl vf_test_use_forever_look_frame(con
 extern "C" __declspec(dllimport) void __cdecl vf_test_forever_look_world_done();
 extern "C" __declspec(dllimport) int __cdecl vf_test_delivered_glow(float*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_grading_stats(GradingStats*);
+extern "C" __declspec(dllimport) void __cdecl vf_test_image_stats(ImageStats*);
+extern "C" __declspec(dllimport) void __cdecl vf_test_image_status(ImageQualityStatus*);
+extern "C" __declspec(dllimport) void __cdecl vf_test_image_world_done();
 extern "C" __declspec(dllimport) int __cdecl vf_test_forever_look_guards(engine::CodeRange*, int);
 extern "C" __declspec(dllimport) void __cdecl vf_test_forever_look_status(ForeverLookStatus*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_use_world_hook_client(const FrameInputs*, int);
@@ -1853,6 +1857,7 @@ void CheckSettingsWindowKeepsItsSize(Harness& h, const PanelRect& expected, cons
 #include "early_composite_look_checks.h"
 #include "multisampling_checks.h"
 #include "texture_filtering_checks.h"
+#include "image_quality_checks.h"
 
 void CheckFirstColumnIsFogged(const Image& transmittance, const D3DVIEWPORT9& world)
 {
@@ -1932,6 +1937,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     transparent_fog_checks::CheckTransparentFogSetting(outDir, FullPath(iniPath));
     texture_filtering_checks::CheckForcedSamplerFilter();
     texture_filtering_checks::CheckShippedSetting(FullPath(iniPath));
+    image_quality_checks::CheckShippedSetting(FullPath(iniPath));
 
     if (cpuOnly)
     {
@@ -2141,6 +2147,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     CheckLinearComposite(h, cfg, eye, at, proj, world);
     CheckDisabledTemporalIsStable(h, cfg, eye, at, proj, world);
     forever_look_checks::CheckColourGrading(h, world, classic);
+    image_quality_checks::CheckSharpening(h, world);
     forever_look_checks::CheckFogCompensatesTheDeliveredGlow(h, cfg, world);
     vf_test_set_config(&cfg);
 

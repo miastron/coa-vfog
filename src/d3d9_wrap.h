@@ -3,6 +3,7 @@
 #include "config.h"
 #include "engine.h"
 #include "grading_renderer.h"
+#include "image_renderer.h"
 #include "msaa_depth.h"
 #include "transparent_fog.h"
 #include "water_types.h"
@@ -66,3 +67,7 @@ bool GradeWorld(FogDevice* device, const D3DVIEWPORT9& world, const float* curve
                 const char** skipReason);
 void ReleaseGrading(FogDevice* device);
 GradingStats GradingStatsOf(FogDevice* device);
+bool EnhanceWorldImage(FogDevice* device, const D3DVIEWPORT9& world, const ImageSettings& settings,
+                       const char** skipReason);
+void ReleaseImage(FogDevice* device);
+ImageStats ImageStatsOf(FogDevice* device);

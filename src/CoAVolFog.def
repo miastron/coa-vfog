@@ -73,6 +73,9 @@ EXPORTS
     vf_test_forever_look_world_done
     vf_test_delivered_glow
     vf_test_grading_stats
+    vf_test_image_stats
+    vf_test_image_status
+    vf_test_image_world_done
     vf_test_forever_look_guards
     vf_test_forever_look_status
     vf_test_use_world_hook_client

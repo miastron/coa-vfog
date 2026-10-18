@@ -153,6 +153,9 @@ public:
     bool Grade(const D3DVIEWPORT9& world, const float* curve, float strength, const char** skip);
     void ReleaseGrading() { m_grading.ReleaseDefaultPool(); }
     GradingStats Grading() const { return m_grading.Stats(); }
+    bool EnhanceImage(const D3DVIEWPORT9& world, const ImageSettings& settings, const char** skip);
+    void ReleaseImage() { m_image.ReleaseDefaultPool(); }
+    ImageStats Image() const { return m_image.Stats(); }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override;
     ULONG STDMETHODCALLTYPE AddRef() override;
@@ -581,6 +584,7 @@ private:
     Renderer m_renderer;
     WaterRenderer m_water;
     GradingRenderer m_grading;
+    ImageRenderer m_image;
     TextureFilterOverride m_filtering;
 };
 
@@ -947,6 +951,7 @@ FogDevice::~FogDevice()
     Unregister(this);
     AbortWater();
     m_grading.ReleaseAll();
+    m_image.ReleaseAll();
     m_water.ReleaseAll();
     m_renderer.ReleaseAll();
     ReleaseDepth();
@@ -1105,6 +1110,7 @@ HRESULT FogDevice::ResetDevice(D3DPRESENT_PARAMETERS* pp)
     AbortWater();
     m_water.ReleaseDefaultPool();
     m_grading.ReleaseDefaultPool();
+    m_image.ReleaseDefaultPool();
     if (!m_fog)
         return m_real->Reset(pp);
 
@@ -1206,6 +1212,14 @@ bool FogDevice::Grade(const D3DVIEWPORT9& world, const float* curve, float stren
     if (skip)
         *skip = graded ? "" : m_grading.LastSkipReason();
     return graded;
+}
+
+bool FogDevice::EnhanceImage(const D3DVIEWPORT9& world, const ImageSettings& settings, const char** skip)
+{
+    const bool drawn = m_image.Draw(m_real, world, settings);
+    if (skip)
+        *skip = drawn ? "" : m_image.LastSkipReason();
+    return drawn;
 }
 
 void SetRealDirect3DCreate9(Direct3DCreate9Fn fn)
@@ -1422,4 +1436,25 @@ void ReleaseGrading(FogDevice* device)
 GradingStats GradingStatsOf(FogDevice* device)
 {
     return device ? device->Grading() : GradingStats();
+}
+
+bool EnhanceWorldImage(FogDevice* device, const D3DVIEWPORT9& world, const ImageSettings& settings,
+                       const char** skipReason)
+{
+    if (device)
+        return device->EnhanceImage(world, settings, skipReason);
+    if (skipReason)
+        *skipReason = "no fog device";
+    return false;
+}
+
+void ReleaseImage(FogDevice* device)
+{
+    if (device)
+        device->ReleaseImage();
+}
+
+ImageStats ImageStatsOf(FogDevice* device)
+{
+    return device ? device->Image() : ImageStats();
 }

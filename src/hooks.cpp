@@ -6,6 +6,7 @@
 #include "engine.h"
 #include "fog_model.h"
 #include "forever_look.h"
+#include "image_quality.h"
 #include "log.h"
 #include "spell_lights.h"
 #include "texture_tint.h"
@@ -1147,6 +1148,7 @@ extern "C" void __cdecl vf_on_frame_end()
         g_failed = true;
     }
     ForeverLookAtFrameEnd();
+    ImageQualityAtFrameEnd(g_worldClient->device);
 }
 
 extern "C" void __cdecl vf_on_water_pass_begin(const void* liquidRenderer)
@@ -1254,6 +1256,7 @@ extern "C" void __cdecl vf_on_opaque_done()
 extern "C" void __cdecl vf_on_world_done()
 {
     ForeverLookAtWorldDone();
+    ImageQualityAtWorldDone();
     __try
     {
         OnWorldDone();

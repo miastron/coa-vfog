@@ -309,15 +309,21 @@ bool DrawWorld(Config& c)
 
 bool DrawAntialiasing(Config& c)
 {
-    const Section section("Antialiasing");
+    const Section section("Antialiasing and sharpening");
     if (!section)
         return false;
-    return Toggle("Keep the game's multisampling", c.multisampling,
-                  "Keep the game's Multisampling video option (smooth edges) when the graphics driver can copy its "
-                  "depth for the fog and water: NVIDIA through NVAPI, AMD and Intel through RESZ. Off: multisampling "
-                  "stays off. The game lists its Multisampling choices once per start, so turning this on takes "
-                  "effect after restarting the game; turning it off applies the next time the game resets its "
-                  "display, for example after changing Multisampling or the resolution in its Video options");
+    bool changed = Slider("Sharpening", c.sharpening, 0.0f, 1.0f, "%.2f",
+                          "Contrast-adaptive sharpening of the 3D view at the end of the world render, before names "
+                          "and the interface: brings back detail that blurry textures, antialiasing and the fog "
+                          "soften, more where the image is flat than at edges. 0 = off");
+    changed |= Toggle("Keep the game's multisampling", c.multisampling,
+                      "Keep the game's Multisampling video option (smooth edges) when the graphics driver can copy "
+                      "its depth for the fog and water: NVIDIA through NVAPI, AMD and Intel through RESZ. Off: "
+                      "multisampling stays off. The game lists its Multisampling choices once per start, so turning "
+                      "this on takes effect after restarting the game; turning it off applies the next time the game "
+                      "resets its display, for example after changing Multisampling or the resolution in its Video "
+                      "options");
+    return changed;
 }
 
 bool DrawWater(Config& c)

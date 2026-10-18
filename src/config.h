@@ -62,6 +62,7 @@ struct Config
     int foreverGlow = 0;
     float colorGrading = 0.0f;
     int anisotropicFiltering = 16;
+    float sharpening = 0.0f;
     float farClipMax = kFarClipMaxKeepsClientCap;
     float maxDistance = 5000.0f;
     float temporal = 0.85f;
