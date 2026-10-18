@@ -78,8 +78,8 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
   targets, shadow maps) and point-filtered samplers keep the game's filter, a higher level the game asks for is kept,
   and the level is limited to the device's `MaxAnisotropy`. The DLL's own passes set their samplers on the real
   device and are not affected.
-- **Sharpening** (`Sharpening`, off by default): contrast-adaptive sharpening of the world viewport at the end of
-  the world render, after the colour grading and before names and the interface.
+- **SMAA antialiasing** (`Antialiasing`, off by default) and **sharpening** (`Sharpening`, off by default) of the
+  world viewport at the end of the world render, after the colour grading and before names and the interface.
 - **Opt-in** (all off by default): Forever's per-light glow amount (`ForeverGlow`) and colour curve (`ColorGrading`)
   where Classic lights cover the camera, see-through effects fogged at their own distance (`TransparentFog`), and an
   energy-normalised phase for the Classic layers' sun and moon scattering (`ClassicPhase`).
@@ -177,12 +177,18 @@ uses the byte the composite receives, so a glow above 1, which wraps, is compens
 world render, before names and the interface, writing `lerp(scene, curve(scene), ColorGrading·t)`; the ghost view,
 the view under water and a view without a grading key are left alone.
 
-**Sharpening.** With `Sharpening` above 0 the world viewport captured at the world-done hook is copied at the frame
-end and redrawn through a contrast-adaptive sharpening filter after AMD FidelityFX CAS: from the minimum and maximum
-of the 3×3 neighbourhood, `w = −sqrt(saturate(min(lo, 2 − hi)/hi))/lerp(8, 5, Sharpening)` with `lo` and `hi` the
-cross plus box minima and maxima, and the pixel becomes `(e + w·(b + d + f + h))/(1 + 4w)`. Flat areas stay as they
-are, and edges that already have contrast are sharpened less than soft ones. A frame without a world render is left
-alone; with `Sharpening=0` nothing is drawn and the copy is released.
+**Antialiasing and sharpening.** With `Antialiasing=1` or `Sharpening` above 0 the world viewport captured at the
+world-done hook is copied at the frame end. SMAA 1x (Jimenez et al., the `SMAA_PRESET_HIGH` settings of the
+reference `SMAA.hlsl`, fetched at build time) finds luma edges into one texture, computes blending weights into a
+second from its area and search tables (`D3DFMT_A8L8` and `D3DFMT_L8`), and blends the neighbourhood back into the
+world viewport, reading and writing in linear light where the device supports sRGB reads and writes of the back
+buffer format. It runs with or without the game's multisampling and smooths the alpha-tested edges multisampling
+misses. Sharpening then redraws the smoothed image (or the copy) through a contrast-adaptive filter after AMD
+FidelityFX CAS: from the minimum and maximum of the 3×3 neighbourhood,
+`w = −sqrt(saturate(min(lo, 2 − hi)/hi))/lerp(8, 5, Sharpening)` with `lo` and `hi` the cross plus box minima and
+maxima, and the pixel becomes `(e + w·(b + d + f + h))/(1 + 4w)`. Flat areas stay as they are, and edges that
+already have contrast are sharpened less than soft ones. A frame without a world render is left alone; with both off
+nothing is drawn and the textures are released.
 
 **Transparent fog.** Fog drawn once after the world gives every see-through effect the fog of the surface behind
 it, where the stock client fogs it by its own distance. With `TransparentFog=1`, above water, the glare and the fog
@@ -709,7 +715,8 @@ untouched from the next start.
 ## Build
 
 Requirements: Visual Studio 2022 (C++ x86), the Windows 10/11 SDK (`fxc.exe`), CMake 3.20+. The first configure
-downloads Dear ImGui v1.92.9b (FetchContent, pinned by SHA-256) into the build directory.
+downloads Dear ImGui v1.92.9b and SMAA (commit `71c806a`, MIT licence) with FetchContent, pinned by SHA-256, into the
+build directory.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
@@ -876,6 +883,7 @@ its comments describe every key. In the game, `Ctrl+F7` opens the same settings 
 | `ForeverGlow` | 0 | 1 gives the client's glow Forever's per-light amount where Classic lights cover the camera |
 | `ColorGrading` | 0 | Strength 0..1 of Forever's per-light colour curve over the 3D view; 0 = off |
 | `AnisotropicFiltering` | 16 | Anisotropic filtering of the game's mipmapped textures: 0 = the game's own, 2–16 |
+| `Antialiasing` | 0 | SMAA antialiasing of the 3D view |
 | `Sharpening` | 0 | Contrast-adaptive sharpening of the 3D view, 0..1; 0 = off |
 | `FarClipMax` | 1583 | Continent view distance up to 1583 yd, within `farclip`; 0 keeps Ascension's 791 cap |
 | `MaxDistance` | 5000 | Fog range: sky integration length and the Classic distance-curve scale |

@@ -312,10 +312,13 @@ bool DrawAntialiasing(Config& c)
     const Section section("Antialiasing and sharpening");
     if (!section)
         return false;
-    bool changed = Slider("Sharpening", c.sharpening, 0.0f, 1.0f, "%.2f",
-                          "Contrast-adaptive sharpening of the 3D view at the end of the world render, before names "
-                          "and the interface: brings back detail that blurry textures, antialiasing and the fog "
-                          "soften, more where the image is flat than at edges. 0 = off");
+    bool changed = Toggle("SMAA antialiasing", c.antialiasing,
+                          "Smooth the jagged edges of the 3D view, also those multisampling misses: leaves, grass, "
+                          "fences and hair. Runs at the end of the world render, before names and the interface");
+    changed |= Slider("Sharpening", c.sharpening, 0.0f, 1.0f, "%.2f",
+                      "Contrast-adaptive sharpening of the 3D view at the end of the world render, before names and "
+                      "the interface: brings back detail that blurry textures, antialiasing and the fog soften, more "
+                      "where the image is flat than at edges. 0 = off");
     changed |= Toggle("Keep the game's multisampling", c.multisampling,
                       "Keep the game's Multisampling video option (smooth edges) when the graphics driver can copy "
                       "its depth for the fog and water: NVIDIA through NVAPI, AMD and Intel through RESZ. Off: "

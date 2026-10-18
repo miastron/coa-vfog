@@ -2148,6 +2148,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     CheckDisabledTemporalIsStable(h, cfg, eye, at, proj, world);
     forever_look_checks::CheckColourGrading(h, world, classic);
     image_quality_checks::CheckSharpening(h, world);
+    image_quality_checks::CheckAntialiasing(h, world);
     forever_look_checks::CheckFogCompensatesTheDeliveredGlow(h, cfg, world);
     vf_test_set_config(&cfg);
 

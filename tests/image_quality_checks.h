@@ -12,6 +12,15 @@ constexpr float kHalfSharpening = 0.5f;
 constexpr float kFullSharpening = 1.0f;
 constexpr int kFlatTolerance = 1;
 constexpr int kSteeperRampAtLeast = 2;
+constexpr int kStairDark = 32;
+constexpr int kStairLight = 224;
+constexpr LONG kRowsPerStairStep = 4;
+constexpr int kBlendedLow = 40;
+constexpr int kBlendedHigh = 216;
+constexpr LONG kEdgeBand = 3;
+constexpr float kBlendedRowsAtLeast = 0.5f;
+
+using FillWorld = void (*)(IDirect3DDevice9*, const D3DVIEWPORT9&);
 
 struct SharpenedFrame
 {
@@ -22,6 +31,7 @@ struct SharpenedFrame
     ImageQualityStatus status;
 
     unsigned Draws() const { return after.sharpened - before.sharpened; }
+    unsigned Smoothings() const { return after.smoothed - before.smoothed; }
 };
 
 LONG RampStart(const D3DVIEWPORT9& world)
@@ -46,16 +56,32 @@ void FillSoftEdge(IDirect3DDevice9* dev, const D3DVIEWPORT9& world)
                                    D3DCOLOR_XRGB(kLightGrey, kLightGrey, kLightGrey));
 }
 
-SharpenedFrame RenderSharpenedFrame(Harness& h, const D3DVIEWPORT9& world, float sharpening, bool worldDone)
+LONG StairEdge(const D3DVIEWPORT9& world, LONG y)
 {
-    Config cfg = {};
-    cfg.sharpening = sharpening;
+    return static_cast<LONG>(world.X + world.Width / 4) + (y - static_cast<LONG>(world.Y)) / kRowsPerStairStep;
+}
+
+void FillStairs(IDirect3DDevice9* dev, const D3DVIEWPORT9& world)
+{
+    const LONG right = static_cast<LONG>(world.X + world.Width);
+    for (LONG y = static_cast<LONG>(world.Y); y < static_cast<LONG>(world.Y + world.Height); ++y)
+    {
+        const LONG edge = StairEdge(world, y);
+        forever_look_checks::ClearRect(dev, static_cast<LONG>(world.X), y, edge, y + 1,
+                                       D3DCOLOR_XRGB(kStairDark, kStairDark, kStairDark));
+        forever_look_checks::ClearRect(dev, edge, y, right, y + 1, D3DCOLOR_XRGB(kStairLight, kStairLight, kStairLight));
+    }
+}
+
+SharpenedFrame RenderImageFrame(Harness& h, const D3DVIEWPORT9& world, const Config& cfg, FillWorld fill,
+                                bool worldDone)
+{
     vf_test_set_config(&cfg);
     SharpenedFrame result;
     h.BeginFrame();
     forever_look_checks::PrepareClearableTarget(h.dev);
     h.dev->Clear(0, nullptr, D3DCLEAR_TARGET, kOutsideColour, 1.0f, 0);
-    FillSoftEdge(h.dev, world);
+    fill(h.dev, world);
     forever_look_checks::CaptureWorldViewport(h.dev, world);
     vf_test_image_stats(&result.before);
     if (worldDone)
@@ -78,9 +104,29 @@ SharpenedFrame RenderSharpenedFrame(Harness& h, const D3DVIEWPORT9& world, float
     return result;
 }
 
+SharpenedFrame RenderSharpenedFrame(Harness& h, const D3DVIEWPORT9& world, float sharpening, bool worldDone)
+{
+    Config cfg = {};
+    cfg.sharpening = sharpening;
+    return RenderImageFrame(h, world, cfg, &FillSoftEdge, worldDone);
+}
+
+SharpenedFrame RenderStairs(Harness& h, const D3DVIEWPORT9& world, bool antialiasing, float sharpening)
+{
+    Config cfg = {};
+    cfg.antialiasing = antialiasing;
+    cfg.sharpening = sharpening;
+    return RenderImageFrame(h, world, cfg, &FillStairs, true);
+}
+
+int GreyAt(const Image& image, LONG x, LONG y)
+{
+    return image.At(static_cast<UINT>(x), static_cast<UINT>(y))[1];
+}
+
 int GreyAt(const Image& image, LONG x)
 {
-    return image.At(static_cast<UINT>(x), kSampleRow)[1];
+    return GreyAt(image, x, static_cast<LONG>(kSampleRow));
 }
 
 int SteepestStep(const Image& image, const D3DVIEWPORT9& world)
@@ -140,6 +186,68 @@ void CheckSharpening(Harness& h, const D3DVIEWPORT9& world)
     vf_test_set_config(&defaults);
 }
 
+float BlendedRowShare(const Image& image, const D3DVIEWPORT9& world)
+{
+    int blendedRows = 0;
+    int rows = 0;
+    const LONG margin = kRowsPerStairStep * 2;
+    for (LONG y = static_cast<LONG>(world.Y) + margin; y < static_cast<LONG>(world.Y + world.Height) - margin; ++y)
+    {
+        ++rows;
+        const LONG edge = StairEdge(world, y);
+        for (LONG x = edge - kEdgeBand; x <= edge + kEdgeBand; ++x)
+        {
+            const int grey = GreyAt(image, x, y);
+            if (grey >= kBlendedLow && grey <= kBlendedHigh)
+            {
+                ++blendedRows;
+                break;
+            }
+        }
+    }
+    return rows ? static_cast<float>(blendedRows) / rows : 0.0f;
+}
+
+bool StairFlatsKept(const Image& image, const D3DVIEWPORT9& world)
+{
+    const LONG y = static_cast<LONG>(world.Y + world.Height / 2);
+    const LONG edge = StairEdge(world, y);
+    return GreyAt(image, static_cast<LONG>(world.X) + kFlatProbeInset, y) == kStairDark &&
+           GreyAt(image, edge + kFlatProbeInset, y) == kStairLight;
+}
+
+void CheckAntialiasing(Harness& h, const D3DVIEWPORT9& world)
+{
+    const SharpenedFrame off = RenderStairs(h, world, false, 0.0f);
+    const SharpenedFrame smoothed = RenderStairs(h, world, true, 0.0f);
+    const SharpenedFrame both = RenderStairs(h, world, true, kHalfSharpening);
+    const SharpenedFrame sharpenedOnly = RenderStairs(h, world, false, kHalfSharpening);
+    const SharpenedFrame offAgain = RenderStairs(h, world, false, 0.0f);
+    std::printf("     stair edge rows with a blended pixel: off %.2f, SMAA %.2f, SMAA and sharpening %.2f; SMAA draws "
+                "%u %u, linear-light blend %d\n",
+                BlendedRowShare(off.image, world), BlendedRowShare(smoothed.image, world),
+                BlendedRowShare(both.image, world), smoothed.Smoothings(), both.Smoothings(),
+                smoothed.after.linearBlend ? 1 : 0);
+    Check(off.Smoothings() == 0 && BlendedRowShare(off.image, world) == 0.0f,
+          "without antialiasing the stair edge keeps only its two greys");
+    Check(smoothed.Smoothings() == 1 && smoothed.status.drawn &&
+              BlendedRowShare(smoothed.image, world) >= kBlendedRowsAtLeast,
+          "SMAA at the frame end blends the pixels along a shallow stair edge in the world viewport");
+    Check(StairFlatsKept(smoothed.image, world) && OutsideKept(smoothed.image, world),
+          "SMAA leaves flat areas and everything outside the world viewport unchanged");
+    Check(smoothed.statesKept && both.statesKept,
+          "SMAA, alone and followed by sharpening, restores render, sampler, texture, shader, pixel constant, stream, "
+          "viewport, scissor, render target and depth state");
+    Check(both.Smoothings() == 1 && both.Draws() == 1 && BlendedRowShare(both.image, world) >= kBlendedRowsAtLeast &&
+              both.after.holdsAntialiasingTargets,
+          "with SMAA and sharpening both on, the smoothed image is sharpened in the same frame-end pass");
+    Check(sharpenedOnly.Smoothings() == 0 && !sharpenedOnly.after.holdsAntialiasingTargets &&
+              offAgain.Draws() == 0 && !offAgain.after.holdsSceneCopy,
+          "turning SMAA off releases its textures and turning both off releases the scene copy");
+    Config defaults = {};
+    vf_test_set_config(&defaults);
+}
+
 void CheckShippedSetting(const std::wstring& shippedIni)
 {
     Config defaults = {};
@@ -147,5 +255,7 @@ void CheckShippedSetting(const std::wstring& shippedIni)
     GetPrivateProfileStringW(L"CoAVolFog", L"Sharpening", L"", text, 16, shippedIni.c_str());
     Check(defaults.sharpening == 0.0f && std::wcscmp(text, L"0") == 0,
           "sharpening is off by default and in the shipped INI");
+    Check(!defaults.antialiasing && GetPrivateProfileIntW(L"CoAVolFog", L"Antialiasing", -1, shippedIni.c_str()) == 0,
+          "SMAA antialiasing is off by default and in the shipped INI");
 }
 }

@@ -111,6 +111,10 @@ const BoolSetting kBoolSettings[] = {
     {"LightShafts", &Config::lightShafts},           {"WorldShadows", &Config::worldShadows},
 };
 
+const BoolSetting kImageBoolSettings[] = {
+    {"Antialiasing", &Config::antialiasing},
+};
+
 const BoolSetting kWaterBoolSettings[] = {
     {"WaterClientSplashes", &Config::waterClientSplashes},
 };
@@ -145,6 +149,8 @@ template <typename Visit>
 void ForEachBoolSetting(Visit visit)
 {
     for (const BoolSetting& s : kBoolSettings)
+        visit(s);
+    for (const BoolSetting& s : kImageBoolSettings)
         visit(s);
     for (const BoolSetting& s : kWaterBoolSettings)
         visit(s);
@@ -360,6 +366,7 @@ bool SameLiveSettings(const Config& a, const Config& b)
 {
     return SameFogSettings(a, b) && SameValues(kLookIntSettings, a, b) && SameValues(kLookFloatSettings, a, b) &&
            SameValues(kImageIntSettings, a, b) && SameValues(kImageFloatSettings, a, b) &&
+           SameValues(kImageBoolSettings, a, b) &&
            SameValues(kWaterIntSettings, a, b) && SameValues(kWaterFloatSettings, a, b) &&
            SameValues(kWaterBoolSettings, a, b);
 }
