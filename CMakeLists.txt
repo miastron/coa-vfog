@@ -180,6 +180,7 @@ add_library(CoAVolFog SHARED
     src/settings_panel.cpp
     src/spell_lights.cpp
     src/status_log.cpp
+    src/texture_filtering.cpp
     src/texture_tint.cpp
     src/transparent_fog.cpp
     src/water_contacts.cpp
@@ -202,6 +203,7 @@ target_compile_definitions(version PRIVATE WIN32_LEAN_AND_MEAN)
 add_executable(vfog_harness tests/harness.cpp src/client_code.cpp src/client_light_stay.cpp
                src/client_ripple_sprites.cpp src/config.cpp src/engine_actors.cpp
                src/engine_lights.cpp src/local_light_stabiliser.cpp src/spell_lights.cpp src/texture_tint.cpp
+               src/texture_filtering.cpp
                src/fog_data.cpp src/fog_model.cpp src/gpu_timing.cpp src/log.cpp src/noise_volume.cpp
                src/transparent_fog.cpp src/water_contacts.cpp src/water_data.cpp src/water_spectrum.cpp
                src/water_fft.cpp src/water_ripples.cpp src/status_log.cpp)

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <iterator>
 
 namespace
 {
@@ -31,6 +32,8 @@ const char* const kLogLevelNames[] = {"Errors", "Info", "Debug"};
 const char* const kWaterQualityNames[] = {"Low: 128 waves, sky reflections only",
                                           "Medium: 256 waves, scene reflections",
                                           "High: 256 waves, finer scene reflections"};
+const char* const kAnisotropyNames[] = {"Off: the game's filtering", "2x", "4x", "8x", "16x"};
+const int kAnisotropyLevels[] = {0, 2, 4, 8, 16};
 const char* const kWaterDebugViewNames[] = {"Off",        "Normals",      "Foam",   "Transmittance",
                                            "Reflection", "Liquid class", "Ripples"};
 
@@ -261,12 +264,29 @@ bool DrawViewDistance(Config& c)
     return changed;
 }
 
+bool DrawAnisotropicFiltering(Config& c)
+{
+    int index = 0;
+    for (int i = 0; i < static_cast<int>(std::size(kAnisotropyLevels)); ++i)
+        if (kAnisotropyLevels[i] <= c.anisotropicFiltering)
+            index = i;
+    const bool changed =
+        ImGui::Combo("Anisotropic filtering", &index, kAnisotropyNames, static_cast<int>(std::size(kAnisotropyNames)));
+    ImGui::SetItemTooltip("%s", "Sharp ground, roads and walls at grazing angles. The game's Texture Filtering option "
+                                "never reaches the ground, buildings or grass, which stay trilinear; this filters "
+                                "every mipmapped texture the game draws at least this much. Off: the game's own");
+    if (changed)
+        c.anisotropicFiltering = kAnisotropyLevels[index];
+    return changed;
+}
+
 bool DrawWorld(Config& c)
 {
     const Section section("World");
     if (!section)
         return false;
-    bool changed = Toggle("Fog under water", c.underwater, "Keep the effect while the camera is under water");
+    bool changed = DrawAnisotropicFiltering(c);
+    changed |= Toggle("Fog under water", c.underwater, "Keep the effect while the camera is under water");
     changed |= Toggle("Fog effects at their own distance", c.transparentFog,
                       "Particles, spell effects and other see-through models are fogged by their own distance, as "
                       "the stock client does, with a linear fog fitted to the volumetric fog within 100 yd; the fog "

@@ -12,6 +12,7 @@
 #include "log.h"
 #include "msaa_depth.h"
 #include "spell_lights.h"
+#include "texture_filtering.h"
 #include "texture_tint.h"
 #include "noise_volume.h"
 #include "water_contacts.h"
@@ -1851,6 +1852,7 @@ void CheckSettingsWindowKeepsItsSize(Harness& h, const PanelRect& expected, cons
 #include "transparent_fog_checks.h"
 #include "early_composite_look_checks.h"
 #include "multisampling_checks.h"
+#include "texture_filtering_checks.h"
 
 void CheckFirstColumnIsFogged(const Image& transmittance, const D3DVIEWPORT9& world)
 {
@@ -1928,6 +1930,8 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     water_data_checks::CheckWaterData(outDir, waterDataPath);
     water_settings_checks::CheckWaterSettings(outDir, FullPath(iniPath));
     transparent_fog_checks::CheckTransparentFogSetting(outDir, FullPath(iniPath));
+    texture_filtering_checks::CheckForcedSamplerFilter();
+    texture_filtering_checks::CheckShippedSetting(FullPath(iniPath));
 
     if (cpuOnly)
     {
@@ -2015,6 +2019,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
         parent->Release();
 
     h.CreateEngineObjects();
+    texture_filtering_checks::CheckForcedAnisotropyOnTheDevice(h.dev);
     CheckFogIntegration(h.dev);
     CheckLocalLightInputs();
     CheckPointLightTableCapture();

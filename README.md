@@ -72,6 +72,12 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
   stop (`WaterRipples`), in place of the client's flat splash and wake sprites (`WaterClientSplashes`).
 - **Multisampling**: the game's Multisampling option is kept where the DLL can copy the multisampled depth
   (`Multisampling`); fog and water edges are resolved per sample.
+- **Anisotropic filtering** (`AnisotropicFiltering`, 16x by default): the device wrapper turns the game's linear
+  minification of every mipmapped texture into anisotropic filtering, so the ground, buildings and grass, which the
+  game's Texture Filtering option never reaches, stay sharp at grazing angles. Textures with one level (render
+  targets, shadow maps) and point-filtered samplers keep the game's filter, a higher level the game asks for is kept,
+  and the level is limited to the device's `MaxAnisotropy`. The DLL's own passes set their samplers on the real
+  device and are not affected.
 - **Opt-in** (all off by default): Forever's per-light glow amount (`ForeverGlow`) and colour curve (`ColorGrading`)
   where Classic lights cover the camera, see-through effects fogged at their own distance (`TransparentFog`), and an
   energy-normalised phase for the Classic layers' sun and moon scattering (`ClassicPhase`).
@@ -662,6 +668,13 @@ Engine notes behind the code:
   (`0x7EC11D`–`0x7EC152`); the client bakes the water colours into its per-frame depth ramps. The water is lit by
   the direct light (band 0, `0xD38BD8`), which `0x7EE756` copies to the world's direct light; band 9
   (`0xD38BF8`) only colours the sun and moon sprites (`0x7F36F6`).
+- Texture filtering. Read from the wowdecomp reconstruction of the 12340 client, not yet checked against the
+  binary's bytes: the `textureFilteringMode` CVar sets the filter mode and anisotropy (`0x4B61C0`, `0x4B6230`) that
+  `TextureCreate` (`0x4B8C80`) gives a texture only when its caller passes `defaultFilter` = 1, as the M2 textures
+  do. `CMap::LoadTexture` (`0x7D9990`), which loads the terrain layers (`CMapArea`), the WMO materials and the detail
+  doodads, passes 0 with `GxTex_LinearMipLinear`, so those stay trilinear at any Texture Filtering setting. The
+  override needs no client address: it acts on the `SetTexture` and `SetSamplerState` calls the game makes through
+  the wrapper, and the client never reads a sampler state back or records a state block (`CGxDeviceD3d`).
 - Not used. `0xD38B98` is fog group 0's exponent, which Extensions.dll overrides (group 0's end is `0xD38B94`), and
   `0xD38C9C` is a near-constant model lighting direction, not the visible sun, so the fog's light direction
   follows the sprite positions.
@@ -853,6 +866,7 @@ its comments describe every key. In the game, `Ctrl+F7` opens the same settings 
 | `GlowCompensation` | 1 | Pre-compensate the fog for the client's glow |
 | `ForeverGlow` | 0 | 1 gives the client's glow Forever's per-light amount where Classic lights cover the camera |
 | `ColorGrading` | 0 | Strength 0..1 of Forever's per-light colour curve over the 3D view; 0 = off |
+| `AnisotropicFiltering` | 16 | Anisotropic filtering of the game's mipmapped textures: 0 = the game's own, 2–16 |
 | `FarClipMax` | 1583 | Continent view distance up to 1583 yd, within `farclip`; 0 keeps Ascension's 791 cap |
 | `MaxDistance` | 5000 | Fog range: sky integration length and the Classic distance-curve scale |
 | `Temporal` | 0.85 | History weight, 0 = off |

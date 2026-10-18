@@ -5,6 +5,7 @@
 #include "msaa_depth.h"
 #include "overlay.h"
 #include "renderer.h"
+#include "texture_filtering.h"
 #include "texture_tint.h"
 #include "water_renderer.h"
 
@@ -189,6 +190,7 @@ public:
     }
     UINT STDMETHODCALLTYPE GetNumberOfSwapChains() override { return m_real->GetNumberOfSwapChains(); }
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override;
+    HRESULT ResetDevice(D3DPRESENT_PARAMETERS* pp);
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty) override
     {
         DrawOverlay(m_real);
@@ -350,7 +352,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetTexture(DWORD i, IDirect3DBaseTexture9* t) override
     {
-        return m_real->SetTexture(i, t);
+        return m_filtering.SetTexture(m_real, i, t, ForcedAnisotropy());
     }
     HRESULT STDMETHODCALLTYPE GetTextureStageState(DWORD i, D3DTEXTURESTAGESTATETYPE t, DWORD* v) override
     {
@@ -366,7 +368,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetSamplerState(DWORD i, D3DSAMPLERSTATETYPE t, DWORD v) override
     {
-        return m_real->SetSamplerState(i, t, v);
+        return m_filtering.SetSamplerState(m_real, i, t, v, ForcedAnisotropy());
     }
     HRESULT STDMETHODCALLTYPE ValidateDevice(DWORD* passes) override { return m_real->ValidateDevice(passes); }
     HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT n, const PALETTEENTRY* e) override
@@ -539,6 +541,8 @@ private:
     ~FogDevice();
     void ReleaseDepth();
     bool BindFallbackDepth();
+    void ResetTextureFiltering();
+    static unsigned ForcedAnisotropy();
     SceneDepth Depth() const;
     bool DepthWriteOverridden() const { return m_suppressDepthWrite || m_forceDepthWrite || m_waterForcesDepthWrite; }
     DWORD DepthWriteToApply() const
@@ -577,6 +581,7 @@ private:
     Renderer m_renderer;
     WaterRenderer m_water;
     GradingRenderer m_grading;
+    TextureFilterOverride m_filtering;
 };
 
 namespace
@@ -920,6 +925,19 @@ FogDevice::FogDevice(WrappedD3D9* parent, IDirect3DDevice9* real, bool fog, D3DF
 {
     m_parent->AddRef();
     Register(this);
+    ResetTextureFiltering();
+}
+
+void FogDevice::ResetTextureFiltering()
+{
+    D3DCAPS9 caps = {};
+    m_filtering.Reset(SUCCEEDED(m_real->GetDeviceCaps(&caps)) ? DeviceMaxAnisotropy(caps) : 1);
+}
+
+unsigned FogDevice::ForcedAnisotropy()
+{
+    const Config& cfg = GlobalConfig().Get();
+    return cfg.enable ? AnisotropyLevel(cfg.anisotropicFiltering) : 1;
 }
 
 FogDevice::~FogDevice()
@@ -1072,6 +1090,14 @@ HRESULT FogDevice::GetDirect3D(IDirect3D9** out)
 }
 
 HRESULT FogDevice::Reset(D3DPRESENT_PARAMETERS* pp)
+{
+    const HRESULT hr = ResetDevice(pp);
+    if (SUCCEEDED(hr))
+        ResetTextureFiltering();
+    return hr;
+}
+
+HRESULT FogDevice::ResetDevice(D3DPRESENT_PARAMETERS* pp)
 {
     if (!pp)
         return D3DERR_INVALIDCALL;

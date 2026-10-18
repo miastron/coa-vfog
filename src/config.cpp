@@ -52,6 +52,10 @@ const FloatSetting kLookFloatSettings[] = {
     {"ColorGrading", &Config::colorGrading, 0.0f, 1.0f},
 };
 
+const IntSetting kImageIntSettings[] = {
+    {"AnisotropicFiltering", &Config::anisotropicFiltering, 0, 16},
+};
+
 const IntSetting kWaterIntSettings[] = {
     {"WaterQuality", &Config::waterQuality, 1, 3},
     {"WaterDebugView", &Config::waterDebugView, 0, 6},
@@ -113,6 +117,8 @@ void ForEachIntSetting(Visit visit)
     for (const IntSetting& s : kIntSettings)
         visit(s);
     for (const IntSetting& s : kLookIntSettings)
+        visit(s);
+    for (const IntSetting& s : kImageIntSettings)
         visit(s);
     for (const IntSetting& s : kWaterIntSettings)
         visit(s);
@@ -347,8 +353,8 @@ bool SameFogSettings(const Config& a, const Config& b)
 bool SameLiveSettings(const Config& a, const Config& b)
 {
     return SameFogSettings(a, b) && SameValues(kLookIntSettings, a, b) && SameValues(kLookFloatSettings, a, b) &&
-           SameValues(kWaterIntSettings, a, b) && SameValues(kWaterFloatSettings, a, b) &&
-           SameValues(kWaterBoolSettings, a, b);
+           SameValues(kImageIntSettings, a, b) && SameValues(kWaterIntSettings, a, b) &&
+           SameValues(kWaterFloatSettings, a, b) && SameValues(kWaterBoolSettings, a, b);
 }
 
 std::string SettingChanges(const Config& before, const Config& after)
