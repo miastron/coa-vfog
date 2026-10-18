@@ -166,18 +166,9 @@ float2 LayerIntervalWithin(float2 interval, int layer)
     return float2(max(interval.x, LayerStart(layer)), min(interval.y, LayerLimit(layer)));
 }
 
-float4 DensityProfiles(MarchRay ray, float distanceAlongRay)
+float StepDensity(float4 stepProfiles, float4 layerMask, float4 densityScales)
 {
-    float variation = DensityVariationAlongRay(ray, distanceAlongRay);
-    return float4(DensityProfile(LoadConstantFogLayer(0), ray, distanceAlongRay, variation),
-                  DensityProfile(LoadConstantFogLayer(1), ray, distanceAlongRay, variation),
-                  DensityProfile(LoadConstantFogLayer(2), ray, distanceAlongRay, variation),
-                  DensityProfile(LoadConstantFogLayer(3), ray, distanceAlongRay, variation));
-}
-
-float SampleDensity(MarchRay ray, float distanceAlongRay, float4 layerMask, float4 densityScales)
-{
-    return dot(DensityProfiles(ray, distanceAlongRay) * layerMask, densityScales);
+    return dot(stepProfiles * layerMask, densityScales);
 }
 
 float LightSampleScattering(LocalLight light, float3 attenuation, float3 viewDirection, float distanceAlongRay,
@@ -194,14 +185,14 @@ float LightSampleScattering(LocalLight light, float3 attenuation, float3 viewDir
 }
 
 float IntervalScattering(LocalLight light, float3 attenuation, float2 interval, float4 layerMask,
-                         float4 densityScales, MarchRay ray)
+                         float4 densityScales, float4 stepProfiles, MarchRay ray)
 {
+    float density = StepDensity(stepProfiles, layerMask, densityScales);
     float quadrature = 0;
     [loop] for (int sample = 0; sample < 2; ++sample)
     {
         float distanceAlongRay = lerp(interval.x, interval.y, QuadratureFraction(sample));
-        quadrature += LightSampleScattering(light, attenuation, ray.viewDirection, distanceAlongRay,
-                                            SampleDensity(ray, distanceAlongRay, layerMask, densityScales));
+        quadrature += LightSampleScattering(light, attenuation, ray.viewDirection, distanceAlongRay, density);
     }
     return 0.5 * quadrature * (interval.y - interval.x);
 }
@@ -218,7 +209,8 @@ float4 PieceLayers(int piece, float2 interval, float2 pieceInterval, float4 litL
 }
 
 float LightOwnIntervalsScattering(LocalLight light, float3 attenuation, float2 interval, bool wholeStep,
-                                  bool layerBoundaryInStep, float4 litLayers, float4 densityScales, MarchRay ray)
+                                  bool layerBoundaryInStep, float4 litLayers, float4 densityScales,
+                                  float4 stepProfiles, MarchRay ray)
 {
     float scattering = 0;
     int lastPiece = layerBoundaryInStep ? kFogLayers : 0;
@@ -227,7 +219,8 @@ float LightOwnIntervalsScattering(LocalLight light, float3 attenuation, float2 i
         float2 pieceInterval = PieceInterval(piece, interval);
         float4 pieceLayers = PieceLayers(piece, interval, pieceInterval, litLayers);
         [branch] if (pieceInterval.y > pieceInterval.x && any(pieceLayers != 0))
-            scattering += IntervalScattering(light, attenuation, pieceInterval, pieceLayers, densityScales, ray);
+            scattering += IntervalScattering(light, attenuation, pieceInterval, pieceLayers, densityScales,
+                                             stepProfiles, ray);
     }
     return scattering;
 }
@@ -237,21 +230,12 @@ bool ChordCoversStep(float2 chord, float2 step)
     return chord.x <= step.x && chord.y >= step.y;
 }
 
-float3 WholeStepLightScattering(ChordCoverage coverage, float4 stepLayers, float4 densityScales, MarchRay ray,
-                                float2 step)
+float3 WholeStepLightScattering(ChordCoverage coverage, float4 stepLayers, float4 densityScales,
+                                float4 stepProfiles, MarchRay ray, float2 step)
 {
     float first = lerp(step.x, step.y, QuadratureFraction(0));
     float second = lerp(step.x, step.y, QuadratureFraction(1));
-    float atFirst = 0;
-    float atSecond = 0;
-    [loop] for (int sample = 0; sample < 2; ++sample)
-    {
-        float density = SampleDensity(ray, sample == 0 ? first : second, stepLayers, densityScales);
-        [flatten] if (sample == 0)
-            atFirst = density;
-        else
-            atSecond = density;
-    }
+    float density = StepDensity(stepProfiles, stepLayers, densityScales);
     float3 scattering = 0;
     [loop] for (int index = coverage.firstLight; index < coverage.lightEnd; ++index)
     {
@@ -260,15 +244,15 @@ float3 WholeStepLightScattering(ChordCoverage coverage, float4 stepLayers, float
         {
             float3 attenuation = LocalLightAttenuation(index);
             scattering += LocalLightColour(index) *
-                          (LightSampleScattering(light, attenuation, ray.viewDirection, first, atFirst) +
-                           LightSampleScattering(light, attenuation, ray.viewDirection, second, atSecond));
+                          (LightSampleScattering(light, attenuation, ray.viewDirection, first, density) +
+                           LightSampleScattering(light, attenuation, ray.viewDirection, second, density));
         }
     }
     return 0.5 * (step.y - step.x) * scattering;
 }
 
 float3 LocalLightScattering(ChordCoverage coverage, float4 densityScales, MarchRay ray, float stepStart,
-                            float stepEnd, float4 layerNoiseDensities)
+                            float stepEnd, float4 layerNoiseDensities, float4 stepProfiles)
 {
     float2 step = float2(stepStart, stepEnd);
     float4 litLayers = LayersLitInStep(stepStart, stepEnd) ? layerNoiseDensities : 0;
@@ -288,13 +272,14 @@ float3 LocalLightScattering(ChordCoverage coverage, float4 densityScales, MarchR
             float amount = 0;
             [branch] if (interval.y > interval.x && (!wholeStep || layerBoundaryInStep))
                 amount = LightOwnIntervalsScattering(light, LocalLightAttenuation(index), interval, wholeStep,
-                                                     layerBoundaryInStep, litLayers, densityScales, ray);
+                                                     layerBoundaryInStep, litLayers, densityScales, stepProfiles,
+                                                     ray);
             [branch] if (amount != 0)
                 scattering += LocalLightColour(index) * amount;
         }
     }
     float4 stepLayers = layersCoverStep ? litLayers : 0;
     [branch] if (lightCoversStep && any(stepLayers != 0))
-        scattering += WholeStepLightScattering(coverage, stepLayers, densityScales, ray, step);
+        scattering += WholeStepLightScattering(coverage, stepLayers, densityScales, stepProfiles, ray, step);
     return scattering;
 }

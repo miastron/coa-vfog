@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include "engine_shadows.h"
 #include "fog_data.h"
 #include "fog_model.h"
 #include "fullscreen_triangle.h"
@@ -34,6 +35,24 @@
 #include "ps_noisy_split_composite_low.h"
 #include "ps_noisy_split_composite_mid.h"
 #include "ps_probe.h"
+#include "ps_shadowed_composite_high.h"
+#include "ps_shadowed_composite_low.h"
+#include "ps_shadowed_composite_mid.h"
+#include "ps_shadowed_lit_march_high.h"
+#include "ps_shadowed_lit_march_low.h"
+#include "ps_shadowed_lit_march_mid.h"
+#include "ps_shadowed_lit_noisy_march_high.h"
+#include "ps_shadowed_lit_noisy_march_low.h"
+#include "ps_shadowed_lit_noisy_march_mid.h"
+#include "ps_shadowed_march_high.h"
+#include "ps_shadowed_march_low.h"
+#include "ps_shadowed_march_mid.h"
+#include "ps_shadowed_noisy_march_high.h"
+#include "ps_shadowed_noisy_march_low.h"
+#include "ps_shadowed_noisy_march_mid.h"
+#include "ps_shadowed_split_composite_high.h"
+#include "ps_shadowed_split_composite_low.h"
+#include "ps_shadowed_split_composite_mid.h"
 #include "ps_ray_blur.h"
 #include "ps_ray_composite.h"
 #include "ps_ray_mask.h"
@@ -61,9 +80,15 @@ constexpr DWORD kAllStencilBits = 0xFF;
 constexpr DWORD kUnmarkedSamples = 0;
 constexpr DWORD kNearSamples = 1;
 constexpr DWORD kFarSamples = ~kUnmarkedSamples & kAllStencilBits;
-constexpr DWORD kStages = 11;
+constexpr DWORD kStages = 15;
 constexpr UINT kLayerNoiseRegister = 36;
 constexpr DWORD kAuthoredNoiseStage = 10;
+constexpr DWORD kFirstWorldShadowStage = 11;
+constexpr UINT kSunShadowRegister = 10;
+constexpr UINT kSunShadowLightRegister = 54;
+constexpr UINT kViewToShadowRegister = 55;
+constexpr UINT kViewToShadowRegisters = 3 * kWorldShadowMapCount;
+constexpr int kHardwareShadowModeBit = 8;
 constexpr double kMaxNoiseStepSeconds = 0.25;
 constexpr UINT kRayScale = 4;
 constexpr float kMinViewportDepthExtent = 0.01f;
@@ -85,10 +110,11 @@ constexpr float kHistoryMaxSeconds = 0.25f;
 constexpr float kHistoryMaxMove = 30.0f;
 constexpr float kHistoryMinForwardDot = 0.70710678f;
 constexpr float kLoggedStormBlendSteps = 10.0f;
+constexpr float kMinLoggedLightWeight = 0.005f;
 constexpr unsigned kLocalLightSetSettleFrames = 30;
 constexpr uint64_t kLightIdMixMultiplier = 0x9E3779B97F4A7C15ull;
 constexpr unsigned kLightSetCaptureShift = 32;
-constexpr size_t kCaptureRejectionText = 80;
+constexpr size_t kCaptureRejectionText = 160;
 
 const D3DRENDERSTATETYPE kRenderStates[] = {
     D3DRS_ZENABLE,          D3DRS_ZWRITEENABLE,  D3DRS_ALPHATESTENABLE,   D3DRS_ALPHABLENDENABLE,
@@ -108,6 +134,16 @@ const D3DSAMPLERSTATETYPE kSamplerStates[] = {
 struct Float4
 {
     float x, y, z, w;
+};
+
+struct ScopedWorldShadows
+{
+    WorldShadowInputs inputs;
+
+    ~ScopedWorldShadows()
+    {
+        engine::ReleaseWorldShadows(inputs);
+    }
 };
 
 void LogShaderCaps(IDirect3DDevice9* device, LogLevel level)
@@ -246,11 +282,6 @@ constexpr float kMinGodRayStrength = 0.005f;
 bool g_fogParamsForced = false;
 FogParams g_forcedFogParams = {};
 
-FogParams FogParamsFor(const FrameInputs& in, const Config& cfg, const AuthoredFog* authored)
-{
-    return g_fogParamsForced ? g_forcedFogParams : BuildFogParams(in, cfg, authored);
-}
-
 const char* DrawnNoiseState(const LayerNoise& drawn, const Config& cfg)
 {
     if (drawn.alpha > 0.0f)
@@ -287,11 +318,21 @@ uint64_t MixedLightId(uintptr_t nativeId)
     return mixed ^ (mixed >> 29);
 }
 
+uint32_t SpellLightCount(const LocalLightInputs& lights, uint32_t uploaded)
+{
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < uploaded; ++i)
+        count += lights.pointLights[i].source == LocalLightSource::Spell ? 1 : 0;
+    return count;
+}
+
 uint64_t UploadedLightSet(const LocalLightInputs& lights, uint32_t uploaded)
 {
-    uint64_t set = uploaded + (static_cast<uint64_t>(lights.capture) << kLightSetCaptureShift);
+    uint64_t set = uploaded - SpellLightCount(lights, uploaded) +
+                   (static_cast<uint64_t>(lights.capture) << kLightSetCaptureShift);
     for (uint32_t i = 0; i < uploaded; ++i)
-        set += MixedLightId(lights.pointLights[i].nativeId);
+        if (lights.pointLights[i].source != LocalLightSource::Spell)
+            set += MixedLightId(lights.pointLights[i].nativeId);
     return set;
 }
 
@@ -302,8 +343,11 @@ void DescribeLightPool(const LocalLightInputs& lights, uint32_t uploaded, char* 
     if (lights.candidateCount > uploaded)
         written += static_cast<size_t>(std::snprintf(text, size, ", %u in view", lights.candidateCount));
     if ((lights.skippedDisabled || lights.skippedNonPoint) && written < size)
-        std::snprintf(text + written, size - written, ", %u disabled and %u non-point nodes skipped",
-                      lights.skippedDisabled, lights.skippedNonPoint);
+        written += static_cast<size_t>(std::snprintf(text + written, size - written,
+                                                     ", %u disabled and %u non-point nodes skipped",
+                                                     lights.skippedDisabled, lights.skippedNonPoint));
+    if (lights.skippedHidden && written < size)
+        std::snprintf(text + written, size - written, ", %u hidden with their objects", lights.skippedHidden);
 }
 
 const char* CaptureShortfall(LocalLightCapture capture)
@@ -368,6 +412,20 @@ const char* ViewportOutsideTarget(const D3DVIEWPORT9& vp, const D3DSURFACE_DESC&
 }
 }
 
+uint32_t LoggedLightsSignature(const AuthoredFog& fog)
+{
+    uint32_t signature = 0;
+    for (int i = 0; i < fog.lightCount; ++i)
+        if (fog.lightWeights[i] >= kMinLoggedLightWeight)
+            signature = signature * 31u + fog.lightIds[i];
+    return signature;
+}
+
+FogParams FogParamsFor(const FrameInputs& in, const Config& cfg, const AuthoredFog* authored)
+{
+    return g_fogParamsForced ? g_forcedFogParams : BuildFogParams(in, cfg, authored);
+}
+
 void ForceFogParams(const FogParams* fog)
 {
     g_fogParamsForced = fog != nullptr;
@@ -423,6 +481,14 @@ void Renderer::ReleaseAll()
         SafeRelease(ps);
     for (auto*& ps : m_litNoisyMarch)
         SafeRelease(ps);
+    for (auto*& ps : m_shadowedMarch)
+        SafeRelease(ps);
+    for (auto*& ps : m_shadowedNoisyMarch)
+        SafeRelease(ps);
+    for (auto*& ps : m_shadowedLitMarch)
+        SafeRelease(ps);
+    for (auto*& ps : m_shadowedLitNoisyMarch)
+        SafeRelease(ps);
     SafeRelease(m_temporal);
     SafeRelease(m_historyDepthShader);
     for (auto*& ps : m_composite)
@@ -430,6 +496,8 @@ void Renderer::ReleaseAll()
     for (auto*& ps : m_noisyComposite)
         SafeRelease(ps);
     for (auto*& ps : m_litComposite)
+        SafeRelease(ps);
+    for (auto*& ps : m_shadowedComposite)
         SafeRelease(ps);
     ReleaseSplitComposites();
     m_splitCompositesUnavailable = false;
@@ -444,9 +512,7 @@ void Renderer::LogLightChange(const FrameInputs& in, const AuthoredFog& fog, boo
 {
     const LightParamsSelection& selection = in.lightParams;
     const auto loggedStormStep = static_cast<uint32_t>(std::lround(selection.stormBlend * kLoggedStormBlendSteps));
-    uint32_t signature = authored ? 0x80000000u : 0u;
-    for (int i = 0; i < fog.lightCount; ++i)
-        signature = signature * 31u + fog.lightIds[i];
+    uint32_t signature = (authored ? 0x80000000u : 0u) ^ LoggedLightsSignature(fog);
     signature = signature * 31u + loggedStormStep;
     signature = signature * 31u + static_cast<uint32_t>(selection.screenEffectSlot);
     signature ^= static_cast<uint32_t>(in.mapId) << 20;
@@ -457,8 +523,9 @@ void Renderer::LogLightChange(const FrameInputs& in, const AuthoredFog& fog, boo
     char lights[160] = {};
     int used = 0;
     for (int i = 0; i < fog.lightCount && used < static_cast<int>(sizeof(lights)) - 24; ++i)
-        used += std::snprintf(lights + used, sizeof(lights) - used, "%s%u:%.2f", i ? " " : "", fog.lightIds[i],
-                              fog.lightWeights[i]);
+        if (fog.lightWeights[i] >= kMinLoggedLightWeight)
+            used += std::snprintf(lights + used, sizeof(lights) - used, "%s%u:%.2f", used ? " " : "",
+                                  fog.lightIds[i], fog.lightWeights[i]);
     if (!authored && fog.lightCount == 0)
     {
         VF_LOG_INFO("map %d at (%.0f %.0f %.0f): no Classic fog data, derived layers", in.mapId, in.camPos[0],
@@ -522,8 +589,9 @@ void Renderer::LogUploadedLocalLights(const FrameInputs& in, const Config& cfg, 
     const float* colour = lights[brightest].uploadedColor;
     char pool[kCaptureRejectionText];
     DescribeLightPool(in.localLights, uploaded, pool, sizeof(pool));
-    VF_LOG_INFO("local lights: %u uploaded, brightest %s (%.4g %.4g %.4g), nearest %.1f yd%s", uploaded,
-                LocalLightUpload(cfg).linear ? "linear" : "gamma", colour[0], colour[1], colour[2], nearest, pool);
+    VF_LOG_INFO("local lights: %u uploaded (%u from spells), brightest %s (%.4g %.4g %.4g), nearest %.1f yd%s",
+                uploaded, SpellLightCount(in.localLights, uploaded), LocalLightUpload(cfg).linear ? "linear" : "gamma",
+                colour[0], colour[1], colour[2], nearest, pool);
     if (detailed)
         for (uint32_t i = 0; i < uploaded; ++i)
             LogUploadedLight(i, lights[i], in.camPos);
@@ -567,6 +635,18 @@ bool Renderer::EnsureShaders(IDirect3DDevice9* dev)
         {"ps_lit_noisy_march_low", g_ps_lit_noisy_march_low, &m_litNoisyMarch[0]},
         {"ps_lit_noisy_march_mid", g_ps_lit_noisy_march_mid, &m_litNoisyMarch[1]},
         {"ps_lit_noisy_march_high", g_ps_lit_noisy_march_high, &m_litNoisyMarch[2]},
+        {"ps_shadowed_march_low", g_ps_shadowed_march_low, &m_shadowedMarch[0]},
+        {"ps_shadowed_march_mid", g_ps_shadowed_march_mid, &m_shadowedMarch[1]},
+        {"ps_shadowed_march_high", g_ps_shadowed_march_high, &m_shadowedMarch[2]},
+        {"ps_shadowed_noisy_march_low", g_ps_shadowed_noisy_march_low, &m_shadowedNoisyMarch[0]},
+        {"ps_shadowed_noisy_march_mid", g_ps_shadowed_noisy_march_mid, &m_shadowedNoisyMarch[1]},
+        {"ps_shadowed_noisy_march_high", g_ps_shadowed_noisy_march_high, &m_shadowedNoisyMarch[2]},
+        {"ps_shadowed_lit_march_low", g_ps_shadowed_lit_march_low, &m_shadowedLitMarch[0]},
+        {"ps_shadowed_lit_march_mid", g_ps_shadowed_lit_march_mid, &m_shadowedLitMarch[1]},
+        {"ps_shadowed_lit_march_high", g_ps_shadowed_lit_march_high, &m_shadowedLitMarch[2]},
+        {"ps_shadowed_lit_noisy_march_low", g_ps_shadowed_lit_noisy_march_low, &m_shadowedLitNoisyMarch[0]},
+        {"ps_shadowed_lit_noisy_march_mid", g_ps_shadowed_lit_noisy_march_mid, &m_shadowedLitNoisyMarch[1]},
+        {"ps_shadowed_lit_noisy_march_high", g_ps_shadowed_lit_noisy_march_high, &m_shadowedLitNoisyMarch[2]},
         {"ps_temporal", g_ps_temporal, &m_temporal},
         {"ps_history_depth", g_ps_history_depth, &m_historyDepthShader},
         {"ps_composite_low", g_ps_composite_low, &m_composite[0]},
@@ -578,6 +658,9 @@ bool Renderer::EnsureShaders(IDirect3DDevice9* dev)
         {"ps_lit_composite_low", g_ps_lit_composite_low, &m_litComposite[0]},
         {"ps_lit_composite_mid", g_ps_lit_composite_mid, &m_litComposite[1]},
         {"ps_lit_composite_high", g_ps_lit_composite_high, &m_litComposite[2]},
+        {"ps_shadowed_composite_low", g_ps_shadowed_composite_low, &m_shadowedComposite[0]},
+        {"ps_shadowed_composite_mid", g_ps_shadowed_composite_mid, &m_shadowedComposite[1]},
+        {"ps_shadowed_composite_high", g_ps_shadowed_composite_high, &m_shadowedComposite[2]},
         {"ps_ray_mask", g_ps_ray_mask, &m_rayMask},
         {"ps_ray_blur", g_ps_ray_blur, &m_rayBlur},
         {"ps_ray_composite", g_ps_ray_composite, &m_rayComposite},
@@ -626,6 +709,8 @@ void Renderer::ReleaseSplitComposites()
         SafeRelease(ps);
     for (auto*& ps : m_litSplitComposite)
         SafeRelease(ps);
+    for (auto*& ps : m_shadowedSplitComposite)
+        SafeRelease(ps);
 }
 
 bool Renderer::EnsureSplitComposites(IDirect3DDevice9* dev)
@@ -638,8 +723,10 @@ bool Renderer::EnsureSplitComposites(IDirect3DDevice9* dev)
         {g_ps_split_composite_low, g_ps_split_composite_mid, g_ps_split_composite_high},
         {g_ps_noisy_split_composite_low, g_ps_noisy_split_composite_mid, g_ps_noisy_split_composite_high},
         {g_ps_lit_split_composite_low, g_ps_lit_split_composite_mid, g_ps_lit_split_composite_high},
+        {g_ps_shadowed_split_composite_low, g_ps_shadowed_split_composite_mid, g_ps_shadowed_split_composite_high},
     };
-    IDirect3DPixelShader9** const shaders[] = {m_splitComposite, m_noisySplitComposite, m_litSplitComposite};
+    IDirect3DPixelShader9** const shaders[] = {m_splitComposite, m_noisySplitComposite, m_litSplitComposite,
+                                               m_shadowedSplitComposite};
     static_assert(std::size(code) == std::size(shaders), "one split composite array per shader family");
     HRESULT result = D3D_OK;
     for (size_t family = 0; family < std::size(shaders) && SUCCEEDED(result); ++family)
@@ -661,9 +748,22 @@ bool Renderer::EnsureSplitComposites(IDirect3DDevice9* dev)
     return false;
 }
 
+IDirect3DPixelShader9* const* Renderer::MarchShaders(bool shadowed, bool lit, bool noisy) const
+{
+    if (shadowed && lit)
+        return noisy ? m_shadowedLitNoisyMarch : m_shadowedLitMarch;
+    if (shadowed)
+        return noisy ? m_shadowedNoisyMarch : m_shadowedMarch;
+    if (lit)
+        return noisy ? m_litNoisyMarch : m_litMarch;
+    return noisy ? m_noisyMarch : m_march;
+}
+
 IDirect3DPixelShader9* Renderer::CompositeShader(const CompositeChoice& choice, bool splitSamples) const
 {
     const int index = std::clamp(choice.quality, 1, kQualityLevels) - 1;
+    if (choice.shadowed)
+        return (splitSamples ? m_shadowedSplitComposite : m_shadowedComposite)[index];
     if (choice.lit)
         return (splitSamples ? m_litSplitComposite : m_litComposite)[index];
     if (choice.noisy)
@@ -971,6 +1071,20 @@ void Renderer::BindWrappedVolume(IDirect3DDevice9* dev, DWORD stage, IDirect3DVo
     dev->SetSamplerState(stage, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
     dev->SetSamplerState(stage, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
     dev->SetSamplerState(stage, D3DSAMP_ADDRESSW, D3DTADDRESS_WRAP);
+}
+
+void Renderer::BindSunShadows(IDirect3DDevice9* dev, const FrameInputs& in, const WorldShadowInputs& shadows,
+                              const float* control)
+{
+    float toShadowLightInView[3];
+    TransformDirection(shadows.count > 0 ? shadows.toLight : in.toLight, in.cameraRelativeView, toShadowLightInView);
+    Normalize3(toShadowLightInView);
+    const Float4 light = {toShadowLightInView[0], toShadowLightInView[1], toShadowLightInView[2], 0.0f};
+    dev->SetPixelShaderConstantF(kSunShadowRegister, control, 1);
+    dev->SetPixelShaderConstantF(kSunShadowLightRegister, &light.x, 1);
+    dev->SetPixelShaderConstantF(kViewToShadowRegister, &shadows.viewToShadow[0][0], kViewToShadowRegisters);
+    for (int i = 0; i < kWorldShadowMapCount; ++i)
+        BindTexture(dev, kFirstWorldShadowStage + i, shadows.textures[i], shadows.hardwareComparison);
 }
 
 FogParams Renderer::DrawableFog(IDirect3DDevice9* dev, const FogParams& fog)
@@ -1315,6 +1429,12 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     TransformDirection(in.toLight, in.cameraRelativeView, toLightInView);
     Normalize3(toLightInView);
 
+    ScopedWorldShadows worldShadows;
+    if (cfg.lightShafts && cfg.worldShadows)
+        engine::AcquireWorldShadows(dev, worldShadows.inputs);
+    const WorldShadowInputs& shadows = worldShadows.inputs;
+    const int shadowMode = shadows.count | (shadows.hardwareComparison ? kHardwareShadowModeBit : 0);
+
     float common[9][4] = {
         {static_cast<float>(vp.X), static_cast<float>(vp.Y), static_cast<float>(vp.Width),
          static_cast<float>(vp.Height)},
@@ -1339,7 +1459,7 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     const bool historyValid = m_historyValid && cfg.temporal > 0.0f && m_prevScale == scale &&
                               SameFogSettings(cfg, m_prevConfig) && in.mapId == m_prevMap &&
                               in.lightParams.screenEffectSlot == m_prevLightSlot &&
-                              forwardDot > kHistoryMinForwardDot &&
+                              shadowMode == m_prevShadowMode && forwardDot > kHistoryMinForwardDot &&
                               std::memcmp(m_prevProj, proj, sizeof(m_prevProj)) == 0 &&
                               std::memcmp(&m_prevViewport, &vp, sizeof(vp)) == 0 &&
                               TickSeconds(now - m_prevTicks) < kHistoryMaxSeconds &&
@@ -1393,6 +1513,9 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     dev->SetPixelShaderConstantF(11, &march.x, 1);
     static_assert(sizeof(FogLayer) == 6 * sizeof(Float4), "FogLayer is six shader registers");
     dev->SetPixelShaderConstantF(12, &fog.layers[0].start, 6 * kFogLayers);
+    const Float4 sunShadow = {cfg.lightShafts ? 1.0f : 0.0f, shadows.hardwareComparison ? 1.0f : 0.0f,
+                              shadows.count > 1 ? 1.0f : 0.0f, shadows.count > 0 ? 1.0f : 0.0f};
+    BindSunShadows(dev, in, shadows, &sunShadow.x);
     uint32_t pointLightCount = cfg.localLights ? std::min(in.localLights.pointLightCount, kMaxLocalPointLights) : 0;
     Float4 localConstants[32] = {};
     for (uint32_t i = 0; i < pointLightCount; ++i)
@@ -1432,9 +1555,9 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     LogUploadedLocalLights(in, cfg, pointLightCount);
     const Float4 localControl = {static_cast<float>(pointLightCount), marchLightLimit, cfg.localLightPhase, 0.0f};
     const bool marchesLocalLights = pointLightCount > 0;
-    IDirect3DPixelShader9* const* marches = marchesLocalLights ? (samplesNoise ? m_litNoisyMarch : m_litMarch)
-                                                               : (samplesNoise ? m_noisyMarch : m_march);
-    m_drawnMarch = marches[std::clamp(cfg.quality, 1, 3) - 1];
+    const bool tracesSunShadows = cfg.lightShafts;
+    const bool marchesLitLayers = marchesLocalLights || tracesSunShadows;
+    m_drawnMarch = MarchShaders(tracesSunShadows, marchesLocalLights, samplesNoise)[std::clamp(cfg.quality, 1, 3) - 1];
     dev->SetPixelShader(m_drawnMarch);
     dev->SetPixelShaderConstantF(53, &localControl.x, 1);
     BindTexture(dev, 8, m_localLightData, false);
@@ -1449,8 +1572,8 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     BindTexture(dev, 0, depthTexture, false);
     DrawFullscreenTriangle(dev);
 
-    m_adaptiveLightingHistory =
-        pointLightCount > 0 || m_prevLocalLightCount > 0 || cfg.noiseAmount > 0.0f || samplesNoise;
+    m_adaptiveLightingHistory = pointLightCount > 0 || m_prevLocalLightCount > 0 || shadows.count > 0 ||
+                                cfg.noiseAmount > 0.0f || samplesNoise;
     const bool temporalFiltering = cfg.temporal > 0.0f;
     IDirect3DTexture9* const fogResult =
         temporalFiltering ? FilterWithHistory(dev, depthTexture, reproj, historyValid, cfg.temporal) : m_marchTarget;
@@ -1484,14 +1607,15 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
     dev->SetRenderState(D3DRS_COLORWRITEENABLE,
                         D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
-    const CompositeChoice compositeChoice = {marchesLocalLights, samplesNoise, cfg.quality};
+    const CompositeChoice compositeChoice = {tracesSunShadows, marchesLocalLights, samplesNoise, cfg.quality};
     const bool splitSamples = depth.Multisampled() && EnsureSplitComposites(dev);
     m_drawnComposite = CompositeShader(compositeChoice, false);
     m_drawnSplitComposite = splitSamples ? CompositeShader(compositeChoice, true) : nullptr;
     dev->SetPixelShader(m_drawnComposite);
     dev->SetPixelShaderConstantF(9, &celestialLight.x, 1);
+    dev->SetPixelShaderConstantF(kSunShadowRegister, &sunShadow.x, 1);
     dev->SetPixelShaderConstantF(11, &march.x, 1);
-    const FogParams compositeMarchFog = marchesLocalLights ? WithMeanNoise(fog) : fog;
+    const FogParams compositeMarchFog = marchesLitLayers ? WithMeanNoise(fog) : fog;
     dev->SetPixelShaderConstantF(12, &compositeMarchFog.layers[0].start, 6 * kFogLayers);
     m_drawnGlowCompensation = cfg.glowCompensation && sceneBlend ? in.clientGlowAmount : 0.0f;
     const Float4 composite[3] = {
@@ -1536,6 +1660,7 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     m_prevConfig = cfg;
     m_prevMap = in.mapId;
     m_prevLightSlot = in.lightParams.screenEffectSlot;
+    m_prevShadowMode = shadowMode;
     m_prevLocalLightCount = pointLightCount;
     m_prevTicks = now;
     m_historyValid = temporalFiltering;

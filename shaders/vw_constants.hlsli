@@ -29,6 +29,7 @@ float4 cReflectionFogRange : register(c64);
 float4 cRippleWindow : register(c65);
 float4 cRippleShape : register(c66);
 float4 cRippleFade : register(c67);
+float4 cSwash : register(c68);
 
 sampler2D sSceneColour : register(s0);
 sampler2D sSceneDepth : register(s1);
@@ -245,4 +246,24 @@ float RippleInverseFadeWidth()
 float RippleTexelYards()
 {
     return cRippleFade.z;
+}
+
+float SwashPhase()
+{
+    return cSwash.x;
+}
+
+float SwashDrawdown()
+{
+    return cSwash.y;
+}
+
+float SwashInverseWavelength()
+{
+    return cSwash.z;
+}
+
+float SwashFrontFoam()
+{
+    return cSwash.w;
 }

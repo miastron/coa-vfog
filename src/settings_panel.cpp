@@ -207,6 +207,19 @@ bool DrawLight(Config& c)
                       "How every point light scatters in the fog: 0 evenly in all directions; toward 0.9 mostly in "
                       "the fog between you and the light; below 0 the fog behind the light, steeply brighter toward "
                       "-0.9. The modern client uses one such value for all its lights; 0.3 is a calibration");
+    changed |= Toggle("Lights follow objects", c.lightsFollowObjects,
+                      "A light whose lamp or fire the game no longer draws in view, because it is too far away or "
+                      "hidden, fades out with it");
+    changed |= Toggle("Spell lights", c.spellLights,
+                      "Glowing spell effects and shields light the fog around them, in their own colour");
+    changed |= Slider("Spell light intensity", c.spellLightIntensity, 0.0f, 8.0f, "%.2f",
+                      "Brightness of the spell effects in the fog");
+    changed |= Toggle("Light shafts", c.lightShafts,
+                      "Shadowed in-scattering: terrain, buildings and trees block the sun or moon light in the fog, "
+                      "so it shines through only where the light reaches");
+    changed |= Toggle("World shadows", c.worldShadows,
+                      "Use the client's shadow maps when available, so casters outside the view block the light too; "
+                      "needs Light shafts and the client's shadows");
     changed |= Slider("God rays", c.godRays, 0.0f, 4.0f, "%.2f",
                       "Radial rays from the bright sky around the sun, 0 = off");
     changed |= Toggle("Glow compensation", c.glowCompensation,
@@ -300,7 +313,11 @@ bool DrawWater(Config& c)
     changed |= Slider("Waves", c.waterWaves, 0.0f, 2.0f, "%.2f", "Wave height, 0 = flat water");
     changed |= Slider("Wind", c.waterWind, 0.5f, 10.0f, "%.2f",
                       "Wind that drives the waves; stronger wind makes longer, rougher waves");
-    changed |= Slider("Foam", c.waterFoam, 0.0f, 2.0f, "%.2f", "Foam on wave crests and along shores, 0 = none");
+    changed |= Slider("Foam", c.waterFoam, 0.0f, 2.0f, "%.2f", "Foam on wave crests, 0 = none");
+    changed |= Slider("Shore foam", c.waterShoreFoam, 0.0f, 2.0f, "%.2f",
+                      "Foam along shores and in shallow water, 0 = none");
+    changed |= Slider("Shore waves", c.waterShoreWaves, 0.0f, 2.0f, "%.2f",
+                      "Small waves washing in and out at the waterline, 0 = a still waterline");
     changed |= Slider("Reflections", c.waterReflections, 0.0f, 2.0f, "%.2f",
                       "Reflections of the sky and the scene, 0 = none");
     changed |= Slider("Sun highlight", c.waterSpecular, 0.0f, 4.0f, "%.2f",

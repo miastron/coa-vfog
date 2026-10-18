@@ -388,7 +388,8 @@ float EnergyNormalisedPhaseScale(float g)
 
 PointLightUpload LocalLightUpload(const Config& cfg)
 {
-    return {ScattersInLinearLight(cfg), cfg.localLightIntensity};
+    return {ScattersInLinearLight(cfg), cfg.localLightIntensity, cfg.spellLights ? cfg.spellLightIntensity : 0.0f,
+            cfg.lightsFollowObjects};
 }
 
 bool AnyLayerNoise(const FogParams& fog)

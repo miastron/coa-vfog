@@ -5,7 +5,8 @@ static const float kRoughnessExponent = 0.25;
 static const float kMinRoughnessMoment = 1e-8;
 static const float kRefractionUvPerSlopeYard = 0.005;
 static const float kMaxRefractionDepth = 50;
-static const float kShoreFadePerYard = 2;
+static const float kWaterlineFadeDepth = 0.2;
+static const float kWetShoreShade = 0.75;
 static const float kFoamStateGain = 10;
 static const float kFoamWrap = 0.25;
 static const float kFoamCrestSharpness = 8;
@@ -106,4 +107,15 @@ float SunGlint(float roughness, float3 N, float3 V, float3 L)
     float visibility = 0.5 / max(NoL * (NoV * (1 - alpha) + alpha) + NoV * (NoL * (1 - alpha) + alpha),
                                  kMinVisibilityDenominator);
     return distribution * visibility * FresnelSchlick(dot(V, H)) * NoL;
+}
+
+float3 WetShore(float3 copied, float columnDepth, float drawdown)
+{
+    float wetness = saturate(columnDepth / max(drawdown, kWaterlineFadeDepth));
+    return copied * lerp(1, kWetShoreShade, wetness);
+}
+
+float WaterlineCoverage(float columnDepth, float drawdown)
+{
+    return saturate((columnDepth - drawdown) / kWaterlineFadeDepth);
 }

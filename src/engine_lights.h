@@ -4,7 +4,7 @@
 
 constexpr uint32_t kMaxLocalPointLights = 8;
 constexpr uint32_t kLocalLightCandidatePool = 24;
-constexpr float kLocalPointLightContributionCutoff = 1.0f / 256.0f;
+constexpr float kLocalPointLightContributionCutoff = 1.0f / 64.0f;
 constexpr float kMaxLocalPointLightRadius = 200.0f;
 constexpr float kLocalLightGamma = 2.2f;
 
@@ -34,6 +34,8 @@ struct PointLightUpload
 {
     bool linear = true;
     float intensity = 1.0f;
+    float spellIntensity = 0.0f;
+    bool followObjects = true;
 };
 
 struct LocalLightCamera
@@ -41,6 +43,12 @@ struct LocalLightCamera
     float position[3] = {};
     float cameraRelativeView[16] = {};
     float glProjection[16] = {};
+};
+
+enum class LocalLightSource : uint32_t
+{
+    World,
+    Spell,
 };
 
 struct LocalPointLight
@@ -52,6 +60,7 @@ struct LocalPointLight
     float cutoff = 0.0f;
     uint32_t enabled = 1;
     uintptr_t nativeId = 0;
+    LocalLightSource source = LocalLightSource::World;
 };
 
 enum class LocalLightCapture : uint32_t
@@ -74,6 +83,7 @@ struct LocalLightInputs
     uint32_t candidateCount = 0;
     uint32_t skippedDisabled = 0;
     uint32_t skippedNonPoint = 0;
+    uint32_t skippedHidden = 0;
     float interiorBlend = 0.0f;
     bool cameraInterior = false;
     LocalLightCapture capture = LocalLightCapture::Captured;
@@ -83,6 +93,8 @@ bool PointLightMeetsView(const LocalPointLight& light, const LocalLightCamera& c
 
 namespace engine
 {
+constexpr uintptr_t kWorldM2Scene = 0x00CD754C;
+
 void UploadedPointLightColor(const float captured[3], const PointLightUpload& upload, float uploaded[3]);
 float PointLightCutoff(const float color[3], const float attenuation[3]);
 double LocalLightPriority(const LocalPointLight& light, const float cameraPosition[3]);

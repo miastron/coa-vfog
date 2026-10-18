@@ -10,6 +10,8 @@
 #include "noise_volume.h"
 #include "overlay.h"
 #include "renderer.h"
+#include "spell_lights.h"
+#include "texture_tint.h"
 #include "transparent_fog.h"
 #include "water_data.h"
 #include "water_renderer.h"
@@ -88,6 +90,7 @@ void Attach(HMODULE module)
     {
         PrepareAuthoredNoise();
         InstallTransparentFogHooks();
+        InstallSpellLightHooks();
         EnableForeverLookOnHookedClient();
     }
     if (engineHooks && InstallWaterHooks())
@@ -333,6 +336,32 @@ extern "C" const void* __cdecl vf_test_water_pass_thunk(uintptr_t target)
     return RetargetWaterPassThunk(target);
 }
 
+extern "C" void __cdecl vf_test_particle_render_thunks(uintptr_t target, uintptr_t worldSceneSlot,
+                                                       const void** single, const void** batched)
+{
+    RetargetParticleRenderThunks(target, worldSceneSlot, *single, *batched);
+}
+
+extern "C" const void* __cdecl vf_test_mesh_batch_draw_thunk(uintptr_t target)
+{
+    return RetargetMeshBatchDrawThunk(target);
+}
+
+extern "C" int __cdecl vf_test_texture_tint(uintptr_t texture, int alphaWeighted, float* tint)
+{
+    return engine::TextureTint(texture, alphaWeighted != 0, tint) ? 1 : 0;
+}
+
+extern "C" uint32_t __cdecl vf_test_publish_spell_lights(LocalPointLight* out, uint32_t capacity, float intensity)
+{
+    SpellLightCollector& lights = GlobalSpellLights();
+    lights.Publish();
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < lights.Count() && count < capacity; ++i)
+        count += lights.Light(i, intensity, out[count]) ? 1 : 0;
+    return count;
+}
+
 extern "C" void __cdecl vf_test_water_pass_begin_reuses_argument_slot(int reuse)
 {
     ReuseWaterPassBeginArgumentSlot(reuse != 0);
@@ -390,6 +419,11 @@ extern "C" void __cdecl vf_test_clear_transparent_fog_failure()
 extern "C" void __cdecl vf_test_force_fog_params(const FogParams* fog)
 {
     ForceFogParams(fog);
+}
+
+extern "C" uint32_t __cdecl vf_test_logged_lights_signature(const AuthoredFog* fog)
+{
+    return LoggedLightsSignature(*fog);
 }
 
 extern "C" void __cdecl vf_test_record_fog_frame(int rendered, int cameraUnderLiquid, const char* skip)

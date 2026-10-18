@@ -5,6 +5,7 @@
 #include "msaa_depth.h"
 #include "overlay.h"
 #include "renderer.h"
+#include "texture_tint.h"
 #include "water_renderer.h"
 
 #include <cstdio>
@@ -210,7 +211,10 @@ public:
     HRESULT STDMETHODCALLTYPE CreateTexture(UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool,
                                             IDirect3DTexture9** out, HANDLE* shared) override
     {
-        return m_real->CreateTexture(w, h, levels, usage, fmt, pool, out, shared);
+        const HRESULT hr = m_real->CreateTexture(w, h, levels, usage, fmt, pool, out, shared);
+        if (SUCCEEDED(hr) && out)
+            engine::RememberDeviceTexture(*out);
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT w, UINT h, UINT d, UINT levels, DWORD usage, D3DFORMAT fmt,
                                                   D3DPOOL pool, IDirect3DVolumeTexture9** out, HANDLE* shared) override

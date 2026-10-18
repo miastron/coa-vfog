@@ -9,6 +9,17 @@ static const float kMinRayRise = 1e-4;
 static const float kRippleSlopeScale = 3;
 static const float kRippleFullDetailTexels = 2;
 static const float kRippleDetailFadeTexels = 2;
+static const float kDepthFoamPathPerDepth = 1.5;
+static const float kSwashRunupShare = 0.25;
+static const float kSwashBackwashFoam = 0.35;
+static const float kSwashFrontWidthPerDrawdown = 0.3;
+static const float kMinSwashFrontWidth = 0.02;
+static const float kSwashCrestWidth = 0.12;
+static const float kSwashTrailFoam = 0.4;
+static const float kSwashPatchYards = 14;
+static const float kSwashHashWrap = 289;
+static const float2 kSwashHashAxes = float2(12.9898, 78.233);
+static const float kSwashHashScale = 43758.5453;
 
 struct WaterPixel
 {
@@ -27,6 +38,13 @@ struct WaveState
 {
     float4 moments;
     float2 foam;
+};
+
+struct Swash
+{
+    float drawdown;
+    float front;
+    float crest;
 };
 
 struct RippleSample
@@ -202,20 +220,72 @@ float4 WaveFoam(float2 adtUv, float2 dx, float2 dy, float f)
     return saturate(low * rootF + mid * f * rootF + high * pow(f, 4.5)) * WaveFoamIntensity();
 }
 
-float4 FoamAlbedo(WaterPixel w, WaveState waves)
+float SwashHash(float2 cell)
+{
+    cell -= kSwashHashWrap * floor(cell / kSwashHashWrap);
+    return frac(sin(dot(cell, kSwashHashAxes)) * kSwashHashScale);
+}
+
+float SwashPhaseOffset(float2 position)
+{
+    float2 p = position / kSwashPatchYards;
+    float2 cell = floor(p);
+    float2 f = p - cell;
+    f = f * f * (3 - 2 * f);
+    float near = lerp(SwashHash(cell), SwashHash(cell + float2(1, 0)), f.x);
+    float far = lerp(SwashHash(cell + float2(0, 1)), SwashHash(cell + float2(1, 1)), f.x);
+    return lerp(near, far, f.y);
+}
+
+float SwashProfile(float phase)
+{
+    return phase < kSwashRunupShare ? 1 - smoothstep(0, 1, phase / kSwashRunupShare)
+                                    : smoothstep(0, 1, (phase - kSwashRunupShare) / (1 - kSwashRunupShare));
+}
+
+float SwashFrontStrength(float phase)
+{
+    return phase < kSwashRunupShare
+               ? lerp(kSwashBackwashFoam, 1, phase / kSwashRunupShare)
+               : lerp(1, kSwashBackwashFoam, (phase - kSwashRunupShare) / (1 - kSwashRunupShare));
+}
+
+Swash SampleSwash(WaterPixel w)
+{
+    Swash swash = (Swash)0;
+    swash.crest = 1;
+    [branch] if (SwashDrawdown() > 0)
+    {
+        float phase = frac(SwashPhase() + SwashPhaseOffset(w.position.xy));
+        swash.drawdown = SwashDrawdown() * SwashProfile(phase);
+        float frontWidth = max(SwashDrawdown() * kSwashFrontWidthPerDrawdown, kMinSwashFrontWidth);
+        float aboveFront = max(w.columnDepth - swash.drawdown, 0) / frontWidth;
+        swash.front = SwashFrontFoam() * SwashFrontStrength(phase) * exp(-aboveFront * aboveFront);
+        float wave = frac(phase + w.columnDepth * ShoreDistancePerDepth() * SwashInverseWavelength());
+        float fromCrest = min(wave, 1 - wave) / kSwashCrestWidth;
+        swash.crest = lerp(kSwashTrailFoam, 1, exp(-fromCrest * fromCrest));
+    }
+    return swash;
+}
+
+float4 FoamAlbedo(WaterPixel w, WaveState waves, Swash swash)
 {
     float2 adtUv = AdtUv(w.position, waves.moments.xy);
     float2 dx = -w.footprintX.yx * kAdtTilesPerYard;
     float2 dy = -w.footprintY.yx * kAdtTilesPerYard;
     float f = max(waves.foam.x, 0);
-    float shoreWeight = cShoreFoam.x * FoamFade(w.columnDepth * ShoreDistancePerDepth(), cShoreFoam.z);
-    float depthWeight = cDepthFadeFoam.x * FoamFade(w.sceneZ - w.waterZ, cDepthFadeFoam.z);
+    float waterAboveSwash = max(w.columnDepth - swash.drawdown, 0);
+    float shoreWeight = cShoreFoam.x * swash.crest *
+                        FoamFade(waterAboveSwash * ShoreDistancePerDepth(), cShoreFoam.z);
+    float depthWeight = cDepthFadeFoam.x * swash.crest *
+                        FoamFade(waterAboveSwash * kDepthFoamPathPerDepth, cDepthFadeFoam.z);
     float4 foam = 0;
     [branch] if (f * WaveFoamIntensity() > 0)
         foam = WaveFoam(adtUv, dx, dy, f);
-    [branch] if (shoreWeight > 0)
-        foam += shoreWeight * FoamLayer(sShoreFoamMask, kShoreFoamSlot, adtUv * cShoreFoam.y + cFoamScroll.zw,
-                                        dx * cShoreFoam.y, dy * cShoreFoam.y);
+    [branch] if (shoreWeight + swash.front > 0)
+        foam += (shoreWeight + swash.front) *
+                FoamLayer(sShoreFoamMask, kShoreFoamSlot, adtUv * cShoreFoam.y + cFoamScroll.zw, dx * cShoreFoam.y,
+                          dy * cShoreFoam.y);
     [branch] if (depthWeight > 0)
         foam += depthWeight * FoamLayer(sDepthFoamMask, kDepthFoamSlot, adtUv * cDepthFadeFoam.y + cDepthFoamScroll.xy,
                                         dx * cDepthFadeFoam.y, dy * cDepthFadeFoam.y);

@@ -30,6 +30,11 @@ bool CentreInView(const LocalPointLight& light, const LocalLightCamera& camera)
     return PointLightMeetsView(light, camera, -light.cutoff);
 }
 
+float FadeSeconds(const LocalPointLight& light)
+{
+    return light.source == LocalLightSource::Spell ? kSpellLightFadeSeconds : kLocalLightFadeSeconds;
+}
+
 float EasedFade(float weight)
 {
     return weight * weight * (3.0f - 2.0f * weight);
@@ -183,12 +188,12 @@ void LocalLightStabiliser::MatchCandidates(const LocalLightCamera& camera, const
 
 void LocalLightStabiliser::AdvanceWeights(float dt)
 {
-    const float step = dt / kLocalLightFadeSeconds;
     for (uint32_t i = 0; i < m_count; ++i)
     {
         Entry& entry = m_entries[i];
         if (!entry.slotted)
             continue;
+        const float step = dt / FadeSeconds(entry.light);
         if (entry.outOfView)
         {
             entry.weight = 0.0f;

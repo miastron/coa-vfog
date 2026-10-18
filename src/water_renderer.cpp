@@ -3,6 +3,7 @@
 #include "fog_model.h"
 #include "fullscreen_triangle.h"
 #include "log.h"
+#include "renderer.h"
 #include "water_classify.h"
 #include "water_data.h"
 
@@ -57,6 +58,7 @@ constexpr float kWaterF0 = 0.02f;
 constexpr int kSchlickExponent = 5;
 constexpr float kMinClarity = 0.01f;
 constexpr float kShoreDistancePerDepth = 4.0f;
+constexpr float kSwashFrontFoamPerShoreFoam = 2.0f;
 constexpr float kMinStockFogRange = 1e-3f;
 constexpr double kMaxFoamStepSeconds = 0.1;
 constexpr double kSummarySeconds = 60.0;
@@ -77,6 +79,18 @@ constexpr int kSkyHorizon = 4;
 constexpr int kSkyColourOfBand[kWaterSkyBands] = {kSkyTop, kSkyMiddle, kSkyUpperBand, kSkyLowerBand, kSkyHorizon};
 constexpr int kCloseWaterColour = 0;
 constexpr int kFarWaterColour = 1;
+
+struct ShoreSwell
+{
+    float periodSeconds;
+    float drawdownYards;
+    float wavelengthYards;
+};
+
+constexpr ShoreSwell kNoSwell = {0.0f, 0.0f, 1.0f};
+constexpr ShoreSwell kShoreSwellOfClass[kWaterClassCount] = {
+    kNoSwell, {4.5f, 0.15f, 5.0f}, {3.0f, 0.06f, 3.0f}, {7.0f, 0.3f, 10.0f}, kNoSwell,
+};
 
 constexpr DWORD kUntaggedStencil = 0;
 
@@ -277,6 +291,21 @@ void ClampedTint(const float* linearTint, float* rgb)
 {
     for (int c = 0; c < 3; ++c)
         rgb[c] = Saturate(linearTint[c]);
+}
+
+float ShoreFoamWeight(const WaterPreset& preset, WaterClass waterClass)
+{
+    const float own = std::max(preset.shoreFoam[0], 0.0f);
+    if (own > 0.0f || waterClass != WaterClass::River)
+        return own;
+    const WaterPreset* lake = GlobalWaterData().Preset(WaterClass::Lake);
+    return lake ? std::max(lake->shoreFoam[0], 0.0f) : 0.0f;
+}
+
+float SwashPhase(double seconds, float periodSeconds)
+{
+    const double cycles = seconds / periodSeconds;
+    return static_cast<float>(cycles - std::floor(cycles));
 }
 
 float ScrollOffset(double seconds, int axis, float multiplier)
@@ -1233,12 +1262,17 @@ void WaterRenderer::FillClassConstants(ShadingConstants& c, const WaterPreset& p
     c.scatteringTop = towardZone(preset.scatteringTop, closeWater, preset.scatteringTop[3]);
     c.scatteringBottom = towardZone(preset.scatteringBottom, farWater, preset.scatteringBottom[3]);
 
-    const float foam = std::max(m_cfg.waterFoam, 0.0f);
-    c.depthFadeFoam = {std::max(preset.depthFadeFoam[0], 0.0f) * foam, preset.depthFadeFoam[1],
+    const float shoreFoam = std::max(m_cfg.waterShoreFoam, 0.0f);
+    const float shoreWeight = ShoreFoamWeight(preset, waterClass) * shoreFoam;
+    c.depthFadeFoam = {std::max(preset.depthFadeFoam[0], 0.0f) * shoreFoam, preset.depthFadeFoam[1],
                        preset.depthFadeFoam[2], 0.0f};
-    c.shoreFoam = {std::max(preset.shoreFoam[0], 0.0f) * foam, preset.shoreFoam[1], preset.shoreFoam[2],
-                   kShoreDistancePerDepth};
-    c.waveFoam = {std::max(preset.waveFoam[0], 0.0f) * foam, 0.0f, 0.0f, 0.0f};
+    c.shoreFoam = {shoreWeight, preset.shoreFoam[1], preset.shoreFoam[2], kShoreDistancePerDepth};
+    c.waveFoam = {std::max(preset.waveFoam[0], 0.0f) * std::max(m_cfg.waterFoam, 0.0f), 0.0f, 0.0f, 0.0f};
+    const ShoreSwell& swell = kShoreSwellOfClass[static_cast<int>(waterClass)];
+    const float drawdown = swell.drawdownYards * std::max(m_cfg.waterShoreWaves, 0.0f);
+    if (drawdown > 0.0f)
+        c.swash = {SwashPhase(seconds, swell.periodSeconds), drawdown, 1.0f / swell.wavelengthYards,
+                   shoreWeight * kSwashFrontFoamPerShoreFoam};
     c.waveFoamScaling = {preset.waveFoamScaling[0], preset.waveFoamScaling[1], preset.waveFoamScaling[2], 0.0f};
     c.surfaceResponse = {preset.roughness[0], preset.roughness[1], preset.roughness[2] * m_cfg.waterReflections,
                          m_cfg.waterSpecular};
@@ -1292,7 +1326,7 @@ void WaterRenderer::BuildReflectionFog()
     const bool hasAuthored = m_cfg.dataMode == 1 &&
                              GlobalFogData().Resolve(m_in.mapId, m_in.camPos, m_in.dayFraction, m_in.lightParams,
                                                      authored);
-    const FogParams fog = WithMeanNoise(BuildFogParams(m_in, m_cfg, hasAuthored ? &authored : nullptr));
+    const FogParams fog = WithMeanNoise(FogParamsFor(m_in, m_cfg, hasAuthored ? &authored : nullptr));
     const float exposure = fog.authored ? m_cfg.classicExposure : m_cfg.exposure;
     auto linearScattered = [&fog, exposure](const float* rgb) {
         float out[3];

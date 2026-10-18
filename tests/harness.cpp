@@ -11,6 +11,8 @@
 #include "local_light_stabiliser.h"
 #include "log.h"
 #include "msaa_depth.h"
+#include "spell_lights.h"
+#include "texture_tint.h"
 #include "noise_volume.h"
 #include "water_contacts.h"
 #include "water_data.h"
@@ -76,6 +78,11 @@ extern "C" __declspec(dllimport) int __cdecl vf_test_water_armed();
 extern "C" __declspec(dllimport) int __cdecl vf_test_water_status(const char**);
 extern "C" __declspec(dllimport) const void* __cdecl vf_test_water_pass_thunk(uintptr_t);
 extern "C" __declspec(dllimport) void __cdecl vf_test_water_pass_begin_reuses_argument_slot(int);
+extern "C" __declspec(dllimport) void __cdecl vf_test_particle_render_thunks(uintptr_t, uintptr_t, const void**,
+                                                                            const void**);
+extern "C" __declspec(dllimport) uint32_t __cdecl vf_test_publish_spell_lights(LocalPointLight*, uint32_t, float);
+extern "C" __declspec(dllimport) const void* __cdecl vf_test_mesh_batch_draw_thunk(uintptr_t);
+extern "C" __declspec(dllimport) int __cdecl vf_test_texture_tint(uintptr_t, int, float*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_record_fog_frame(int, int, const char*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_use_fog_hook_client(const FrameInputs*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_hook_stock_fog(engine::StockFog*, const engine::StockFog*);
@@ -115,6 +122,7 @@ extern "C" __declspec(dllimport) void __cdecl vf_test_hook_opaque_done();
 extern "C" __declspec(dllimport) void __cdecl vf_test_hook_world_done();
 extern "C" __declspec(dllimport) void __cdecl vf_test_simulate_fog_hook_failure(int);
 extern "C" __declspec(dllimport) float __cdecl vf_test_drawn_glow_compensation();
+extern "C" __declspec(dllimport) uint32_t __cdecl vf_test_logged_lights_signature(const AuthoredFog*);
 
 namespace
 {
@@ -730,6 +738,30 @@ constexpr uint32_t kEasternKingdomsGlobalLight = 1;
 constexpr uint32_t kStormwindLight = 77;
 constexpr float kDayFraction1800 = 0.75f;
 constexpr float kDayFraction1845 = 2250.0f / 2880.0f;
+
+AuthoredFog BlendOfLights(std::initializer_list<std::pair<uint32_t, float>> lights)
+{
+    AuthoredFog fog = {};
+    for (const auto& light : lights)
+    {
+        fog.lightIds[fog.lightCount] = light.first;
+        fog.lightWeights[fog.lightCount] = light.second;
+        ++fog.lightCount;
+    }
+    return fog;
+}
+
+void CheckNegligibleLightsLeaveTheLightLogAlone()
+{
+    const AuthoredFog blend = BlendOfLights({{4, 0.84f}, {8, 0.16f}});
+    const AuthoredFog withNegligible = BlendOfLights({{4, 0.84f}, {8, 0.16f}, {1, 0.001f}});
+    const AuthoredFog withVisible = BlendOfLights({{4, 0.80f}, {8, 0.15f}, {1, 0.05f}});
+    const uint32_t plain = vf_test_logged_lights_signature(&blend);
+    Check(plain == vf_test_logged_lights_signature(&withNegligible) &&
+              plain != vf_test_logged_lights_signature(&withVisible),
+          "a light whose blend weight rounds to 0.00 neither logs a light change as it enters or leaves the blend, nor "
+          "hides one that carries weight");
+}
 
 void CheckClassicData(const FogData& data)
 {
@@ -1370,8 +1402,7 @@ void CheckSettingsSaveKeepsTheIni(const std::wstring& outDir, const std::wstring
 {
     const std::wstring savedIni = FullPath(outDir + L"\\saved.ini");
     Check(CopyFileW(shippedIni.c_str(), savedIni.c_str(), FALSE) != FALSE, "shipped CoAVolFog.ini copied");
-    for (const wchar_t* removedKey : {L"LightShafts", L"WorldShadows"})
-        WritePrivateProfileStringW(L"CoAVolFog", removedKey, L"0", savedIni.c_str());
+    WritePrivateProfileStringW(L"CoAVolFog", L"MaterialFog", L"0", savedIni.c_str());
     ConfigStore store;
     store.Load(NarrowPath(savedIni));
     const Config shipped = store.Get();
@@ -1379,9 +1410,11 @@ void CheckSettingsSaveKeepsTheIni(const std::wstring& outDir, const std::wstring
     ConfigStore shippedStore;
     shippedStore.Load(NarrowPath(shippedIni));
     const std::string shippedText = ReadText(shippedIni);
-    Check(SameLiveSettings(shipped, shippedStore.Get()) && shippedText.find("LightShafts") == std::string::npos &&
-              shippedText.find("WorldShadows") == std::string::npos,
-          "the removed LightShafts and WorldShadows keys are gone from the shipped INI and ignored in an old one");
+    Check(SameLiveSettings(shipped, shippedStore.Get()) && shippedText.find("MaterialFog") == std::string::npos,
+          "the removed MaterialFog key is gone from the shipped INI and ignored in an old one");
+    Check(shippedText.find("\nLightShafts=1") != std::string::npos &&
+              shippedText.find("\nWorldShadows=1") != std::string::npos && shipped.lightShafts && shipped.worldShadows,
+          "the shipped INI turns LightShafts and WorldShadows on");
 
     Config edited = shipped;
     edited.enable = false;
@@ -1390,6 +1423,7 @@ void CheckSettingsSaveKeepsTheIni(const std::wstring& outDir, const std::wstring
     edited.density = 2.5f;
     edited.temporal = 0.5f;
     edited.localLights = !shipped.localLights;
+    edited.lightShafts = !shipped.lightShafts;
     edited.farClipMax = 900.0f;
     edited.debugView = 2;
     edited.godRays = 99.0f;
@@ -1404,13 +1438,14 @@ void CheckSettingsSaveKeepsTheIni(const std::wstring& outDir, const std::wstring
     reloaded.Load(NarrowPath(savedIni));
     const Config& r = reloaded.Get();
     Check(SameLiveSettings(r, applied) && r.quality == 3 && r.density == 2.5f && r.farClipMax == 900.0f &&
-              r.localLights == edited.localLights && r.enable == shipped.enable && r.overlay == shipped.overlay,
+              r.localLights == edited.localLights && r.lightShafts == edited.lightShafts &&
+              r.enable == shipped.enable && r.overlay == shipped.overlay,
           "saved settings reload unchanged and the restart-only keys stay as they were");
     const std::string text = ReadText(savedIni);
     Check(text.rfind("; CoAVolFog settings.", 0) == 0 && text.find("\nDensity=2.5") != std::string::npos &&
               text.find("\nHaze=1.0") != std::string::npos && text.find("\nEnable=1") != std::string::npos &&
               text.find("; Global density multiplier") != std::string::npos &&
-              text.find("\nLightShafts=0") != std::string::npos && text.find("\nWorldShadows=0") != std::string::npos,
+              text.find("\nLightShafts=0") != std::string::npos && text.find("\nMaterialFog=0") != std::string::npos,
           "saving rewrites only the changed lines and keeps the comments and unknown keys");
 
     Config scratch = store.Get();
@@ -1787,6 +1822,7 @@ void CheckSettingsWindowKeepsItsSize(Harness& h, const PanelRect& expected, cons
 #include "fog_integration_checks.h"
 #include "local_lights_checks.h"
 #include "local_light_stabiliser_checks.h"
+#include "spell_light_checks.h"
 #include "client_light_stay_checks.h"
 #include "noise_variation_checks.h"
 #include "classic_phase_checks.h"
@@ -1867,6 +1903,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     FogData classic;
     Check(classic.Load(dataPath), "Classic fog data loads");
     CheckClassicData(classic);
+    CheckNegligibleLightsLeaveTheLightLogAlone();
     CheckStormBlendsLayersByClassicIndex(classic);
     CheckScreenEffectLightSlot(classic);
     CheckZoneLights(classic);
@@ -1896,9 +1933,11 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     {
         CheckLocalLightInputs();
         CheckPointLightTableCapture();
+        CheckLightsFollowTheirObjects();
         CheckInteriorInputsSurviveAnIncompleteWalk();
         CheckHdrLocalLightColours();
         local_light_stabiliser_checks::CheckLocalLightStabiliser();
+        spell_light_checks::CheckSpellLights();
         client_light_stay_checks::CheckClientLightStay();
         CheckInteriorFogInputs();
         water_contact_checks::CheckWaterContacts();
@@ -1979,9 +2018,12 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     CheckFogIntegration(h.dev);
     CheckLocalLightInputs();
     CheckPointLightTableCapture();
+    CheckLightsFollowTheirObjects();
     CheckInteriorInputsSurviveAnIncompleteWalk();
     CheckHdrLocalLightColours();
     local_light_stabiliser_checks::CheckLocalLightStabiliser();
+    spell_light_checks::CheckSpellLights();
+    spell_light_checks::CheckTextureTintOnTheDevice(h.dev);
     client_light_stay_checks::CheckClientLightStay();
     CheckInteriorFogInputs();
     CheckNoiseVariation(h.dev);
@@ -1995,7 +2037,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     CheckTemporalQuality(h.dev);
     CheckTemporalFallbackNoise(h.dev);
     CheckLightDisappearanceHistory(h);
-    CheckSunOccluderLeavesFogLit(h);
+    CheckSunOcclusion(h);
     classic_phase::CheckSunsetHaloKeepsItsHue(h, FullPath(iniPath));
     water_fft_checks::CheckWaterFft(h.dev);
     water_mask_packing_checks::CheckWaveFoamMaskPacking(h.dev);

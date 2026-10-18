@@ -18,6 +18,8 @@ constexpr float kLampPeakColor = std::max({kLampColor[0], kLampColor[1], kLampCo
 constexpr int kErrorLogLevel = 0;
 constexpr float kFullStorm = 1.0f;
 constexpr int kShippedLogLevel = 1;
+constexpr bool kShafts = true;
+constexpr bool kNoShafts = false;
 
 enum class FogSource
 {
@@ -39,17 +41,21 @@ struct BenchmarkCase
     FogSource fog;
     PointLights lights;
     int logLevel;
+    bool lightShafts;
 };
 
 constexpr BenchmarkCase kCases[] = {
-    {"derived-none", FogSource::Derived, PointLights::None, kErrorLogLevel},
-    {"derived-flood8", FogSource::Derived, PointLights::Flood, kErrorLogLevel},
-    {"derived-lamps8", FogSource::Derived, PointLights::Lamps, kErrorLogLevel},
-    {"classic-none", FogSource::Classic, PointLights::None, kErrorLogLevel},
-    {"classic-lamps8", FogSource::Classic, PointLights::Lamps, kErrorLogLevel},
-    {"classic-storm", FogSource::ClassicStorm, PointLights::None, kErrorLogLevel},
-    {"classic-storm-lamps8", FogSource::ClassicStorm, PointLights::Lamps, kErrorLogLevel},
-    {"derived-none-log1", FogSource::Derived, PointLights::None, kShippedLogLevel},
+    {"derived-none", FogSource::Derived, PointLights::None, kErrorLogLevel, kShafts},
+    {"derived-flood8", FogSource::Derived, PointLights::Flood, kErrorLogLevel, kShafts},
+    {"derived-lamps8", FogSource::Derived, PointLights::Lamps, kErrorLogLevel, kShafts},
+    {"classic-none", FogSource::Classic, PointLights::None, kErrorLogLevel, kShafts},
+    {"classic-lamps8", FogSource::Classic, PointLights::Lamps, kErrorLogLevel, kShafts},
+    {"classic-storm", FogSource::ClassicStorm, PointLights::None, kErrorLogLevel, kShafts},
+    {"classic-storm-lamps8", FogSource::ClassicStorm, PointLights::Lamps, kErrorLogLevel, kShafts},
+    {"derived-none-log1", FogSource::Derived, PointLights::None, kShippedLogLevel, kShafts},
+    {"derived-none-shafts0", FogSource::Derived, PointLights::None, kErrorLogLevel, kNoShafts},
+    {"derived-lamps8-shafts0", FogSource::Derived, PointLights::Lamps, kErrorLogLevel, kNoShafts},
+    {"classic-none-shafts0", FogSource::Classic, PointLights::None, kErrorLogLevel, kNoShafts},
 };
 
 struct StreetLamp
@@ -477,6 +483,7 @@ bool MeasureCases(Harness& h)
             config.logLevel = benchmark.logLevel;
             config.overlay = false;
             config.dataMode = classicCase ? 1 : 0;
+            config.lightShafts = benchmark.lightShafts;
             FrameInputs inputs = StreetInputs(street, benchmark.fog, projection, viewport);
             if (!AddPointLights(inputs, benchmark.lights, street))
                 return false;

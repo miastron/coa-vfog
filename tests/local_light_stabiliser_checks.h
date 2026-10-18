@@ -8,6 +8,7 @@ constexpr float kStabiliserFar = 1000.0f;
 constexpr int kStabiliserMap = 1;
 constexpr int kFadeFrames = static_cast<int>(kLocalLightFadeSeconds / kStabiliserFrameSeconds + 0.5);
 constexpr int kHalfSecondFrames = 30;
+constexpr float kPassedLightReachShare = 0.75f;
 
 LocalLightCamera ForwardCamera()
 {
@@ -272,8 +273,9 @@ void CheckLightLeavingTheViewFreesItsSlotAtOnce()
     LocalLightInputs inputs = CaptureInView(lights, camera);
     StepFrame(stabiliser, camera, 0.0, inputs);
     const bool eightAhead = inputs.pointLightCount == 8 && Uploads(inputs, 1);
+    const float reach = engine::PointLightCutoff(lights[1].color, lights[1].attenuation);
     LocalLightCamera moved = camera;
-    moved.position[2] = 230.0f;
+    moved.position[2] = lights[1].position[2] + kPassedLightReachShare * reach;
     lights.push_back(StabiliserLight(9, 0.0f, 0.0f, 270.0f, 1.0f));
     inputs = CaptureInView(lights, moved);
     const bool firstLeftBehind = inputs.candidateCount == 8 && !Uploads(inputs, 1);

@@ -1,5 +1,7 @@
 #include "engine_lights.h"
 
+#include "client_memory.h"
+
 #include <windows.h>
 
 #include <algorithm>
@@ -11,8 +13,10 @@ namespace
 {
 constexpr uintptr_t kClientImageBase = 0x00400000;
 constexpr uint32_t kClientTimestamp = 0x4C2452FE;
-constexpr uintptr_t kWorldM2Scene = 0x00CD754C;
 constexpr uintptr_t kScenePointLightBuckets = 0x24;
+constexpr uintptr_t kSceneFrameStamp = 0x14;
+constexpr uint32_t kHiddenModelFrames = 2;
+constexpr float kHiddenLightViewInset = 2.0f;
 constexpr uint32_t kPointLightBucketCount = 4096;
 constexpr uint32_t kMaxPointLightBucketNodes = 512;
 constexpr uint32_t kMaxPointLightNodes = 8192;
@@ -26,7 +30,7 @@ constexpr uintptr_t kCameraWmoGroupCount = 0x00CDB0D8;
 constexpr uintptr_t kCameraWmoGroupIds = 0x00CDB0DC;
 constexpr uintptr_t kCameraInteriorFogBlend = 0x00D38B9C;
 constexpr LightCaptureSources kClientLightSources = {
-    kWorldM2Scene, {kCameraWmoInstance, kCameraWmoGroupCount, kCameraWmoGroupIds, kCameraInteriorFogBlend}};
+    engine::kWorldM2Scene, {kCameraWmoInstance, kCameraWmoGroupCount, kCameraWmoGroupIds, kCameraInteriorFogBlend}};
 constexpr uint32_t kMaxCameraWmoGroups = 64;
 constexpr uint32_t kMaxWmoGroups = 4096;
 
@@ -53,19 +57,6 @@ static_assert(offsetof(NativePointLight, color) == 0x3C);
 static_assert(offsetof(NativePointLight, attenuation) == 0x54);
 static_assert(offsetof(NativePointLight, enabled) == 0x60);
 static_assert(offsetof(NativePointLight, next) == 0x68);
-
-template <typename T>
-T Read(uintptr_t address)
-{
-    T value;
-    std::memcpy(&value, reinterpret_cast<const void*>(address), sizeof(value));
-    return value;
-}
-
-bool ValidPointer(uintptr_t address, size_t size)
-{
-    return address >= 0x10000 && !(address & 3) && address < 0xFFF00000 && size <= 0xFFF00000 - address;
-}
 
 bool ValidVector(const float values[3], float minimum, float maximum)
 {
@@ -176,12 +167,6 @@ bool SphereBeyondPlane(const float centre[3], float radius, const ViewPlane& pla
     return signedDistance > radius;
 }
 
-template <size_t Size>
-bool Matches(uintptr_t address, const unsigned char (&expected)[Size])
-{
-    return std::memcmp(reinterpret_cast<const void*>(address), expected, Size) == 0;
-}
-
 bool SupportedLayoutUnsafe()
 {
     const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleA(nullptr));
@@ -224,6 +209,37 @@ bool SupportedLayout()
     }
 }
 
+bool ModelStampsMatchUnsafe()
+{
+    const unsigned char sceneStampAdvance[] = {0x83, 0x46, 0x14, 0x01};
+    const unsigned char lightStampSource[] = {0x8B, 0x53, 0x28, 0x8B, 0x42, 0x14};
+    const unsigned char lightStampStore[] = {0x89, 0x46, 0x6C};
+    const unsigned char staleLightTest[] = {0x8B, 0x41, 0x04, 0x8B, 0x55, 0xFC, 0x3B, 0x42, 0x14};
+    return Matches(0x00821A2D, sceneStampAdvance) && Matches(0x00828B88, lightStampSource) &&
+           Matches(0x00828B9C, lightStampStore) && Matches(0x0081E53F, staleLightTest);
+}
+
+bool ModelStampsMatch()
+{
+    __try
+    {
+        return ModelStampsMatchUnsafe();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+bool ModelHiddenInView(const NativePointLight& native, uint32_t sceneStamp, const LocalLightCamera& camera)
+{
+    if (sceneStamp - native.frameStamp <= kHiddenModelFrames)
+        return false;
+    LocalPointLight centre;
+    std::memcpy(centre.position, native.position, sizeof(centre.position));
+    return PointLightMeetsView(centre, camera, -kHiddenLightViewInset);
+}
+
 bool LinkedIntoTable(const NativePointLight& native, uintptr_t scene, uintptr_t previousLink)
 {
     return native.scene == scene && native.previousLink == previousLink;
@@ -248,6 +264,7 @@ LocalLightCapture CapturePointLightsUnsafe(uintptr_t sceneSlot, const LocalLight
         return LocalLightCapture::Captured;
     if (!ValidPointer(scene, kScenePointLightBuckets + sizeof(uintptr_t)))
         return LocalLightCapture::DamagedTable;
+    const uint32_t sceneStamp = Read<uint32_t>(scene + kSceneFrameStamp);
     const uintptr_t buckets = Read<uintptr_t>(scene + kScenePointLightBuckets);
     if (!buckets)
         return LocalLightCapture::Captured;
@@ -272,6 +289,8 @@ LocalLightCapture CapturePointLightsUnsafe(uintptr_t sceneSlot, const LocalLight
                 ++out.skippedNonPoint;
             else if (!native.enabled)
                 ++out.skippedDisabled;
+            else if (upload.followObjects && ModelHiddenInView(native, sceneStamp, camera))
+                ++out.skippedHidden;
             else
                 engine::SelectLocalPointLightInView(out, CapturedLight(native, address), camera, upload);
             previousLink = address + offsetof(NativePointLight, next);
@@ -521,7 +540,12 @@ bool CaptureLocalLightInputs(const LocalLightCamera& camera, bool withPointLight
     else if (!ValidVector(camera.position, -kMaxWorldCoordinate, kMaxWorldCoordinate))
         out.capture = LocalLightCapture::CameraOutOfRange;
     else
-        CaptureLightInputsFrom(kClientLightSources, camera, withPointLights, upload, out);
+    {
+        static const bool stamped = ModelStampsMatch();
+        PointLightUpload capture = upload;
+        capture.followObjects = upload.followObjects && stamped;
+        CaptureLightInputsFrom(kClientLightSources, camera, withPointLights, capture, out);
+    }
     return out.capture == LocalLightCapture::Captured;
 }
 }

@@ -46,7 +46,8 @@ float4 main(float2 pixelIndex : VPOS) : COLOR0
     WaterPixel w = ReconstructWaterPixel(pixel);
     RippleSample ripples = SampleRipples(w);
     WaveState waves = SampleWaves(w, ripples.slope);
-    float4 foamAlbedo = FoamAlbedo(w, waves);
+    Swash swash = SampleSwash(w);
+    float4 foamAlbedo = FoamAlbedo(w, waves, swash);
 
     float3 N = normalize(float3(-waves.moments.xy, 1));
     float3 V = w.toCamera;
@@ -84,6 +85,7 @@ float4 main(float2 pixelIndex : VPOS) : COLOR0
     float3 encoded = LinearToGamma(colour);
     [branch] if (StockFogApplies())
         encoded = lerp(StockFogColour(), encoded, StockFogVisibility(w.waterZ));
-    encoded = lerp(refraction.copied, encoded, saturate(kShoreFadePerYard * refraction.pathDepth));
+    float3 shore = WetShore(refraction.copied, w.columnDepth, swash.drawdown);
+    encoded = lerp(shore, encoded, WaterlineCoverage(w.columnDepth, swash.drawdown));
     return float4(encoded, 1);
 }

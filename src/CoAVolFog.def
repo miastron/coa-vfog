@@ -37,6 +37,10 @@ EXPORTS
     vf_test_water_armed
     vf_test_water_status
     vf_test_water_pass_thunk
+    vf_test_particle_render_thunks
+    vf_test_publish_spell_lights
+    vf_test_mesh_batch_draw_thunk
+    vf_test_texture_tint
     vf_test_water_pass_begin_reuses_argument_slot
     vf_test_use_fog_hook_client
     vf_test_hook_stock_fog
@@ -75,3 +79,4 @@ EXPORTS
     vf_test_hook_opaque_done
     vf_test_simulate_fog_hook_failure
     vf_test_drawn_glow_compensation
+    vf_test_logged_lights_signature

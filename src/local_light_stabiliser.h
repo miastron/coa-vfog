@@ -5,6 +5,7 @@
 #include <cstdint>
 
 constexpr float kLocalLightFadeSeconds = 1.0f;
+constexpr float kSpellLightFadeSeconds = 0.15f;
 constexpr float kLocalLightPrioritySmoothingSeconds = 0.3f;
 constexpr double kLocalLightSwapMargin = 1.5;
 constexpr uint32_t kLocalLightSwapCaptures = 3;

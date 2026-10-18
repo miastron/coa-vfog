@@ -166,6 +166,8 @@ void CheckHorizonShadowIntegration(IDirect3DDevice9* device, const FogIntegratio
     depth->Release();
 }
 
+#include "sun_shadow_checks.h"
+
 void CheckFogIntegration(IDirect3DDevice9* device)
 {
     CheckShortRangeAuthoredFog();
@@ -197,9 +199,11 @@ void CheckFogIntegration(IDirect3DDevice9* device)
     device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
     const float quad[4][4] = {{-0.5f, -0.5f, 0, 1}, {7.5f, -0.5f, 0, 1},
                              {-0.5f, 7.5f, 0, 1}, {7.5f, 7.5f, 0, 1}};
-    const BYTE* shaders[2][3] = {{g_ps_march_low, g_ps_march_mid, g_ps_march_high},
-                                 {g_ps_lit_march_low, g_ps_lit_march_mid, g_ps_lit_march_high}};
-    const char* variants[] = {"", " with local lights compiled in"};
+    const BYTE* shaders[3][3] = {{g_ps_march_low, g_ps_march_mid, g_ps_march_high},
+                                 {g_ps_lit_march_low, g_ps_lit_march_mid, g_ps_lit_march_high},
+                                 {g_ps_shadowed_march_low, g_ps_shadowed_march_mid, g_ps_shadowed_march_high}};
+    const char* variants[] = {"", " with local lights compiled in", " with sun shadows compiled in"};
+    constexpr int kShadowedVariant = 2;
     struct Medium
     {
         const char* name;
@@ -211,7 +215,7 @@ void CheckFogIntegration(IDirect3DDevice9* device)
     const Medium media[] = {{"partial boundary cell", 780.0f, 1000.0f, 0.004f, 0.0f},
                             {"two-yard layer", 851.0f, 853.0f, 0.5f, 0.0f},
                             {"height-varying two-yard layer", 851.0f, 853.0f, 0.5f, 0.001f}};
-    for (int shaderIndex = 0; shaderIndex < 6; ++shaderIndex)
+    for (int shaderIndex = 0; shaderIndex < 9; ++shaderIndex)
     {
         const int variant = shaderIndex / 3;
         const int quality = shaderIndex % 3;
@@ -273,6 +277,8 @@ void CheckFogIntegration(IDirect3DDevice9* device)
         }
         CheckHorizonShadowIntegration(device, resources, quality + 1, false, variants[variant]);
         CheckHorizonShadowIntegration(device, resources, quality + 1, true, variants[variant]);
+        if (variant == kShadowedVariant)
+            sun_shadow_checks::CheckShadowedMarch(device, resources, quality + 1, shader);
         shader->Release();
     }
     device->SetRenderTarget(0, resources.previousTarget);

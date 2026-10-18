@@ -1,5 +1,6 @@
 #include "engine_actors.h"
 
+#include "client_memory.h"
 #include "log.h"
 
 #include <windows.h>
@@ -83,19 +84,6 @@ const GuardBytes kWaterContactLayout[] = {
     {"entity world position store", 0x007803BD, 12,
      {0x89, 0x79, 0x6C, 0xD8, 0x65, 0xBC, 0x89, 0x59, 0x70, 0x89, 0x51, 0x74}},
 };
-
-template <typename T>
-T Read(uintptr_t address)
-{
-    T value;
-    std::memcpy(&value, reinterpret_cast<const void*>(address), sizeof(value));
-    return value;
-}
-
-bool ValidPointer(uintptr_t address, size_t size)
-{
-    return address >= 0x10000 && !(address & 3) && address < 0xFFF00000 && size <= 0xFFF00000 - address;
-}
 
 bool FiniteWithin(float value, float minimum, float maximum)
 {

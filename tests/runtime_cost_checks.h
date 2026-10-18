@@ -312,7 +312,8 @@ void CheckLocalLightLogLines(Harness& h)
         frame(two);
     const std::string infoLog = LogWrittenSince(logStart);
     Check(rendered && settling &&
-              CountOf(infoLog, "local lights: 2 uploaded, brightest linear (12.99 255 255), nearest 20.0 yd") == 1 &&
+              CountOf(infoLog, "local lights: 2 uploaded (0 from spells), brightest linear (12.99 255 255), "
+                               "nearest 20.0 yd") == 1 &&
               !HasLine(infoLog, "  local light 0:"),
           "at LogLevel 1 a settled change of the uploaded point lights logs one line with the count, the brightest "
           "uploaded colour and the nearest distance");

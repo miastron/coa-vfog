@@ -2,7 +2,9 @@
 
 #include "local_light_stabiliser.h"
 
+#include "client_memory.h"
 #include "log.h"
+#include "spell_lights.h"
 #include "water_classify.h"
 
 #include <algorithm>
@@ -224,19 +226,6 @@ struct OpaqueState
 OpaqueState g_opaque = {};
 uint32_t g_opaqueCaptures = 0;
 
-template <typename T>
-T Read(uintptr_t address)
-{
-    T value;
-    std::memcpy(&value, reinterpret_cast<const void*>(address), sizeof(T));
-    return value;
-}
-
-void ReadFloats(uintptr_t address, float* out, int count)
-{
-    std::memcpy(out, reinterpret_cast<const void*>(address), sizeof(float) * count);
-}
-
 bool Finite(const float* v, int count)
 {
     for (int i = 0; i < count; ++i)
@@ -436,7 +425,10 @@ bool BuildFrameInputsUnsafe(FrameInputs& out, bool withPointLights, const PointL
     const LocalLightCamera lightCamera = FrameLightCamera(out);
     CaptureLocalLightInputs(lightCamera, withPointLights, upload, out.localLights);
     if (withPointLights)
+    {
+        engine::AddSpellLights(out.localLights, GlobalSpellLights(), lightCamera, upload);
         FogLightStabiliser().Step(lightCamera, out.mapId, g_opaqueCaptures, ClockSeconds(), out.localLights);
+    }
 
     out.zoneFogDistance = Read<float>(kZoneFogDistance);
     out.clientGlowAmount = out.inLiquid ? 0.0f : GlowScreenEffectAmount();

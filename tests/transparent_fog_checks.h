@@ -984,6 +984,7 @@ Config LampLitConfig()
     Config cfg = HookConfig(true);
     cfg.glowCompensation = false;
     cfg.localLightIntensity = kLampLitIntensity;
+    cfg.lightShafts = false;
     return cfg;
 }
 

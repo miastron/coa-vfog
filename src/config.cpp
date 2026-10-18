@@ -68,6 +68,7 @@ const FloatSetting kFloatSettings[] = {
     {"ClassicExposure", &Config::classicExposure, 0.0f, 10.0f},
     {"LocalLightIntensity", &Config::localLightIntensity, 0.0f, 8.0f},
     {"LocalLightPhase", &Config::localLightPhase, -0.9f, 0.9f},
+    {"SpellLightIntensity", &Config::spellLightIntensity, 0.0f, 8.0f},
     {"InteriorDensity", &Config::interiorDensity, 0.0f, 1.0f},
     {"InteriorFarFog", &Config::interiorFarFog, 0.0f, 1.0f},
     {"NoiseAmount", &Config::noiseAmount, 0.0f, 1.0f},
@@ -83,6 +84,8 @@ const FloatSetting kWaterFloatSettings[] = {
     {"WaterWaves", &Config::waterWaves, 0.0f, 2.0f},
     {"WaterWind", &Config::waterWind, 0.5f, 10.0f},
     {"WaterFoam", &Config::waterFoam, 0.0f, 2.0f},
+    {"WaterShoreFoam", &Config::waterShoreFoam, 0.0f, 2.0f},
+    {"WaterShoreWaves", &Config::waterShoreWaves, 0.0f, 2.0f},
     {"WaterReflections", &Config::waterReflections, 0.0f, 2.0f},
     {"WaterSpecular", &Config::waterSpecular, 0.0f, 4.0f},
     {"WaterClarity", &Config::waterClarity, 0.25f, 4.0f},
@@ -96,6 +99,8 @@ const BoolSetting kBoolSettings[] = {
     {"LiquidDepth", &Config::liquidDepth},           {"SunMarker", &Config::sunMarker},
     {"Water", &Config::water},                       {"Multisampling", &Config::multisampling},
     {"ClassicNoise", &Config::classicNoise},       {"TransparentFog", &Config::transparentFog},
+    {"SpellLights", &Config::spellLights},           {"LightsFollowObjects", &Config::lightsFollowObjects},
+    {"LightShafts", &Config::lightShafts},           {"WorldShadows", &Config::worldShadows},
 };
 
 const BoolSetting kWaterBoolSettings[] = {

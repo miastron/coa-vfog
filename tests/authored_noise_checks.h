@@ -6,6 +6,8 @@
 #include "ps_noisy_march_high.h"
 #include "ps_noisy_march_low.h"
 #include "ps_noisy_march_mid.h"
+#include "ps_shadowed_composite_mid.h"
+#include "ps_shadowed_noisy_march_mid.h"
 
 namespace authored_noise
 {
@@ -897,6 +899,7 @@ void CheckRendererDrawsStormNoise(Harness& harness)
     config.godRays = 0.0f;
     config.dataMode = 1;
     config.localLights = false;
+    config.lightShafts = false;
     const D3DVIEWPORT9 world = {0, 0, 128, 96, 0, 1};
     const Vec3 at = Add(kHarbourEye, {100, 100, -5});
     float view[16];
@@ -946,6 +949,20 @@ void CheckRendererDrawsStormNoise(Harness& harness)
           "noise; without noise the renderer keeps the noise-free shaders");
     Check(rendered && !drawn[0].splitComposite && !drawn[1].splitComposite,
           "a single-sampled device draws no split composite, with or without authored noise");
+    config.lightShafts = true;
+    vf_test_set_config(&config);
+    harness.BeginFrame();
+    harness.DrawScene(kHarbourEye, view, projection, world);
+    const char* skip = "";
+    const bool shadowedRendered = vf_test_render(&input, &skip) != 0;
+    DrawnShaders shadowed;
+    vf_test_drawn_fog_shaders(&shadowed.march, &shadowed.composite, &shadowed.splitComposite);
+    harness.dev->EndScene();
+    harness.dev->Present(nullptr, nullptr, nullptr, nullptr);
+    Check(shadowedRendered && ShaderRuns(shadowed.march, g_ps_shadowed_noisy_march_mid) &&
+              ShaderRuns(shadowed.composite, g_ps_shadowed_composite_mid),
+          "with LightShafts=1 the storm marches the noise with the shadowed noisy march and composites with the "
+          "shadowed composite");
     vf_test_set_config(&saved);
 }
 

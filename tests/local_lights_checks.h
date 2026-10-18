@@ -13,6 +13,11 @@ bool LocalNear(float a, float b)
     return std::fabs(a - b) <= 1.0e-5f * std::max(1.0f, std::max(std::fabs(a), std::fabs(b)));
 }
 
+float UnitQuadraticReach()
+{
+    return std::sqrt(1.0f / kLocalPointLightContributionCutoff - 1.0f);
+}
+
 LocalPointLight PointLightFixture(float x)
 {
     LocalPointLight light;
@@ -47,7 +52,8 @@ void CheckLocalLightInputs()
     const float linearRadius = engine::PointLightCutoff(light.color, light.attenuation);
     light.attenuation[1] = 0.0f;
     const float constantRadius = engine::PointLightCutoff(light.color, light.attenuation);
-    Check(LocalNear(quadraticRadius, std::sqrt(255.0f)) && LocalNear(linearRadius, 127.5f) &&
+    Check(LocalNear(quadraticRadius, UnitQuadraticReach()) &&
+              LocalNear(linearRadius, (1.0f / kLocalPointLightContributionCutoff - 1.0f) / 2.0f) &&
               constantRadius == kMaxLocalPointLightRadius,
           "point-light bounds follow native quadratic, linear and constant attenuation");
     light.attenuation[0] = 1000.0f;
@@ -114,7 +120,7 @@ void CheckLocalLightInputs()
     Check(distantSelected && !besideSelected && crossingSelected && inView.pointLightCount == 2 &&
               inView.candidateCount == 2 && inView.pointLights[1].position[2] == 900.0f &&
               LocalNear(inView.pointLights[1].uploadedColor[0], 1.0f) &&
-              LocalNear(inView.pointLights[1].cutoff, std::sqrt(255.0f)) && besideWithoutView &&
+              LocalNear(inView.pointLights[1].cutoff, UnitQuadraticReach()) && besideWithoutView &&
               unprojected.pointLightCount == 1,
           "a point light is captured at full strength at any distance while its sphere meets the view, even with "
           "its centre outside, a sphere wholly outside the view is not a candidate, and a camera without a "
@@ -398,6 +404,47 @@ void CheckPointLightTableCapture()
     const bool empty = CaptureTable(*table, noScene) == LocalLightCapture::Captured && noScene.pointLightCount == 0;
     Check(fault && empty,
           "a scene pointer into unmapped memory is a read fault with no lights, and no scene is an empty capture");
+}
+
+constexpr size_t kSceneFrameStampWord = 0x14 / sizeof(uintptr_t);
+constexpr uint32_t kDrawnFrame = 100;
+constexpr float kObjectDepth = 50.0f;
+constexpr float kBehindObjectDepth = -20.0f;
+
+uint32_t CapturedWithStamps(PointLightTable& table, uint32_t secondStamp, float secondDepth, bool follow,
+                            LocalLightInputs& out)
+{
+    LinkPointLightTable(table);
+    table.scene[kSceneFrameStampWord] = kDrawnFrame;
+    table.lights[0].frameStamp = kDrawnFrame;
+    table.lights[0].position[2] = kObjectDepth;
+    table.lights[1].frameStamp = secondStamp;
+    table.lights[1].position[2] = secondDepth;
+    const LocalLightCamera camera = ForwardViewCamera(1.0f, 1000.0f);
+    PointLightUpload upload;
+    upload.followObjects = follow;
+    out = {};
+    engine::CapturePointLightTable(reinterpret_cast<uintptr_t>(&table.sceneSlot), camera, upload, out);
+    return out.pointLightCount;
+}
+
+void CheckLightsFollowTheirObjects()
+{
+    auto table = std::make_unique<PointLightTable>();
+    LocalLightInputs hidden;
+    const uint32_t followed = CapturedWithStamps(*table, kDrawnFrame - 10, kObjectDepth, true, hidden);
+    LocalLightInputs unfollowed;
+    const uint32_t everyLight = CapturedWithStamps(*table, kDrawnFrame - 10, kObjectDepth, false, unfollowed);
+    LocalLightInputs recent;
+    const uint32_t recentlyDrawn = CapturedWithStamps(*table, kDrawnFrame - 2, kObjectDepth, true, recent);
+    LocalLightInputs offView;
+    const uint32_t outsideView = CapturedWithStamps(*table, kDrawnFrame - 10, kBehindObjectDepth, true, offView);
+    Check(followed == 1 && hidden.skippedHidden == 1 &&
+              hidden.pointLights[0].nativeId == reinterpret_cast<uintptr_t>(&table->lights[0]) &&
+              everyLight == 2 && unfollowed.skippedHidden == 0 && recentlyDrawn == 2 && outsideView == 2 &&
+              offView.skippedHidden == 0,
+          "a light in view whose model the client has not drawn for more than two frames is skipped and counted; "
+          "LightsFollowObjects=0, a model drawn two frames ago or a light centre outside the view keeps it");
 }
 
 constexpr float kStatueGreen = 255.0f;

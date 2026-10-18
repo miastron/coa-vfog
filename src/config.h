@@ -45,6 +45,9 @@ struct Config
     bool localLights = true;
     float localLightIntensity = 1.0f;
     float localLightPhase = 0.3f;
+    bool lightsFollowObjects = true;
+    bool spellLights = true;
+    float spellLightIntensity = 1.0f;
     bool interiorAware = true;
     float interiorDensity = 0.15f;
     float interiorFarFog = 1.0f;
@@ -53,6 +56,8 @@ struct Config
     float noiseWindSpeed = 0.5f;
     bool classicNoise = true;
     float godRays = 0.0f;
+    bool lightShafts = true;
+    bool worldShadows = true;
     bool glowCompensation = true;
     int foreverGlow = 0;
     float colorGrading = 0.0f;
@@ -70,6 +75,8 @@ struct Config
     float waterWaves = 1.0f;
     float waterWind = 2.0f;
     float waterFoam = 1.0f;
+    float waterShoreFoam = 1.0f;
+    float waterShoreWaves = 1.0f;
     float waterReflections = 1.0f;
     float waterSpecular = 1.0f;
     float waterClarity = 1.0f;

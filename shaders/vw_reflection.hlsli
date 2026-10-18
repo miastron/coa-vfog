@@ -122,6 +122,7 @@ float4 TraceScreenReflection(WaterPixel w, float2 pixel, float3 R, out float2 hi
 
 static const int kReflectionFogLayers = 4;
 static const int kReflectionFogLayerRegisters = 5;
+static const int kReflectionFogSegments = 8;
 static const float kSkyHitDepthFraction = 0.99;
 static const float kMinPhaseDistance = 1e-6;
 static const float kMinProfileHeightSpan = 1e-3;
@@ -192,9 +193,9 @@ float PathHeight(ReflectedPath path, float distance)
     return path.startHeight + path.heightPerYard * (distance - path.from);
 }
 
-float4 ReflectedPathFog(ReflectedPath path)
+float4 SegmentFog(ReflectedPath path, float from, float to)
 {
-    float3 inscatter = 0;
+    float3 radiance = 0;
     float opticalDepth = 0;
     [unroll] for (int j = 0; j < kReflectionFogLayers; ++j)
     {
@@ -203,8 +204,8 @@ float4 ReflectedPathFog(ReflectedPath path)
         float3 emissive = cReflectionFogLayers[j * kReflectionFogLayerRegisters + 2].rgb;
         float3 diffuse = cReflectionFogLayers[j * kReflectionFogLayerRegisters + 3].rgb;
         float4 scattering = cReflectionFogLayers[j * kReflectionFogLayerRegisters + 4];
-        float start = max(path.from, curve.x);
-        float end = min(path.to, scattering.z);
+        float start = max(from, curve.x);
+        float end = min(to, scattering.z);
         [branch] if (curve.y <= 0 || end <= start)
             continue;
         float span = ReflectionFogCurveIntegral(curve, end) - ReflectionFogCurveIntegral(curve, start);
@@ -212,11 +213,33 @@ float4 ReflectedPathFog(ReflectedPath path)
         float endHeight = PathHeight(path, end);
         float profile = MeanHeightProfile(height, min(startHeight, endHeight), max(startHeight, endHeight));
         float layerDepth = curve.y * span * profile * exp(-path.skyRise * scattering.w);
-        inscatter += (diffuse * ReflectionFogPhase(scattering, path.cosToLight) + emissive) * layerDepth;
+        radiance += (diffuse * ReflectionFogPhase(scattering, path.cosToLight) + emissive) * layerDepth;
         opticalDepth += layerDepth;
     }
-    float transmittance = exp(-opticalDepth);
-    return float4(opticalDepth > 0 ? inscatter / opticalDepth * (1 - transmittance) : 0, transmittance);
+    return float4(radiance, opticalDepth);
+}
+
+float SegmentEnd(ReflectedPath path, int segment)
+{
+    float fraction = (float)segment / kReflectionFogSegments;
+    return path.from + (path.to - path.from) * fraction * fraction;
+}
+
+float4 ReflectedPathFog(ReflectedPath path)
+{
+    float3 inscatter = 0;
+    float transmittance = 1;
+    [loop] for (int segment = 0; segment < kReflectionFogSegments; ++segment)
+    {
+        float4 fog = SegmentFog(path, SegmentEnd(path, segment), SegmentEnd(path, segment + 1));
+        [branch] if (fog.a > 0)
+        {
+            float segmentTransmittance = exp(-fog.a);
+            inscatter += transmittance * fog.rgb / fog.a * (1 - segmentTransmittance);
+            transmittance *= segmentTransmittance;
+        }
+    }
+    return float4(inscatter, transmittance);
 }
 
 ReflectedPath SkyReflectionPath(WaterPixel w, float3 R)

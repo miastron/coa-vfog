@@ -94,6 +94,14 @@ constexpr float kNearShoreDepth = 0.03f;
 constexpr float kMidShoreDepth = 0.25f;
 constexpr BYTE kNoFoamCoverage = 0;
 constexpr BYTE kVisibleFoamCoverage = 16;
+constexpr float kAngleCheckDepth = 0.5f;
+constexpr float kAngleCheckFoamFade = 4.0f;
+constexpr int kMaxAngleCoverageDifference = 24;
+constexpr float kSwashNearShoreDepth = 0.08f;
+constexpr float kSwashDeepWaterX = 380.0f;
+constexpr double kLakeSwashPeriod = 4.5;
+constexpr int kSwashClockSamples = 8;
+constexpr int kMinSwashChange = 8;
 constexpr int kNormalDebugView = 1;
 constexpr int kEdgeReferenceOffset = 4;
 constexpr int kEdgeSearchMargin = 6;
@@ -119,6 +127,16 @@ constexpr int kFogRadianceDebugView = 1;
 constexpr float kSkyFogElevationsDegrees[] = {1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
 constexpr float kMaxSkyReflectionFogMismatch = 0.05f;
 constexpr float kMinComparedFogRadiance = 1e-4f;
+constexpr float kLayeredFogLimit = 5000.0f;
+constexpr float kLayeredFogFarClip = 1583.0f;
+constexpr float kLayeredFogHorizonStart = 1200.0f;
+constexpr float kNearFogDensity = 0.004f;
+constexpr float kNearFogEmissive = 0.02f;
+constexpr float kFarFogDensity = 0.00005f;
+constexpr float kFarFogStrength = 400.0f;
+constexpr float kFarFogExponent = 2.0f;
+constexpr float kFarFogEmissive = 0.6f;
+constexpr float kMaxLayeredSkyReflectionFogMismatch = 0.15f;
 constexpr int kMaxFirstColumnDifference = 2;
 
 const D3DRENDERSTATETYPE kSentinelRenderStates[] = {
@@ -1705,6 +1723,7 @@ void CheckShoreFoamWidthFollowsTheSlope(Harness& h, const Config& base)
     const bool assigned = AssignWaterData(data);
     Config coverage = WaterConfig(base);
     coverage.waterDebugView = kFoamCoverageDebugView;
+    coverage.waterShoreWaves = 0.0f;
     vf_test_set_config(&coverage);
     vf_test_disable_wave_simulation(1);
     const WaterView view = MakeWaterView({360, 0, 40}, {398, 0, -3});
@@ -1722,6 +1741,138 @@ void CheckShoreFoamWidthFollowsTheSlope(Harness& h, const Config& base)
     Check(assigned && result.began && nearCoverage >= kVisibleFoamCoverage && midCoverage <= kNoFoamCoverage,
           "shore foam fades over the estimated distance from the shore (about four times the water depth), not over "
           "the vertical depth");
+    const Config on = WaterConfig(base);
+    vf_test_set_config(&on);
+    AssignWaterData(MakeSyntheticWaterData());
+}
+
+SyntheticWaterData SolidShoreFoamLake(float shoreWeight, float depthWeight)
+{
+    SyntheticWaterData data = MakeSyntheticWaterData();
+    WaterPreset& lake = data.presets[0];
+    Set4(lake.waveFoam, 1.0f, 0.0f, 0.0f, 0.0f);
+    Set4(lake.shoreFoam, shoreWeight, 18.0f, kShoreFoamFadeDepth, 0.0f);
+    Set4(lake.depthFadeFoam, depthWeight, 24.0f, kAngleCheckFoamFade, 0.0f);
+    lake.masks[static_cast<int>(WaterMaskSlot::ShoreFoam)] = kSolidFoamMask;
+    lake.masks[static_cast<int>(WaterMaskSlot::DepthFoam)] = kSolidFoamMask;
+    return data;
+}
+
+std::pair<UINT, UINT> BeachPixel(const WaterView& view, float waterDepth)
+{
+    return WaterSurfacePixel(view, kBeachWaterlineX - waterDepth / kBeachRisePerYard, 0.0f);
+}
+
+BYTE CoverageAt(const Image& image, std::pair<UINT, UINT> pixel)
+{
+    return image.At(pixel.first, pixel.second)[1];
+}
+
+void CheckShoreFoamFollowsItsOwnSetting(Harness& h, const Config& base)
+{
+    const bool assigned = AssignWaterData(SolidShoreFoamLake(1.0f, 0.0f));
+    const WaterView view = MakeWaterView({360, 0, 40}, {398, 0, -3});
+    BasinClient client(h, view);
+    const auto nearShore = BeachPixel(view, kNearShoreDepth);
+    vf_test_disable_wave_simulation(1);
+    Config shoreOnly = WaterConfig(base);
+    shoreOnly.waterDebugView = kFoamCoverageDebugView;
+    shoreOnly.waterShoreWaves = 0.0f;
+    shoreOnly.waterFoam = 0.0f;
+    shoreOnly.waterShoreFoam = 1.0f;
+    vf_test_set_config(&shoreOnly);
+    WaterFrame frame;
+    const BYTE kept = CoverageAt(client.Render(frame).image, nearShore);
+    Config crestsOnly = shoreOnly;
+    crestsOnly.waterFoam = 2.0f;
+    crestsOnly.waterShoreFoam = 0.0f;
+    vf_test_set_config(&crestsOnly);
+    const BYTE removed = CoverageAt(client.Render(frame).image, nearShore);
+    vf_test_disable_wave_simulation(0);
+    std::printf("     shore foam coverage %u with WaterFoam=0 WaterShoreFoam=1, %u with WaterFoam=2 "
+                "WaterShoreFoam=0\n",
+                kept, removed);
+    Check(assigned && kept >= kVisibleFoamCoverage && removed <= kNoFoamCoverage,
+          "WaterShoreFoam alone sets the shore foam: WaterFoam=0 keeps it and WaterFoam=2 does not bring it back");
+    const Config on = WaterConfig(base);
+    vf_test_set_config(&on);
+    AssignWaterData(MakeSyntheticWaterData());
+}
+
+void CheckShallowFoamIgnoresTheCameraAngle(Harness& h, const Config& base)
+{
+    const bool assigned = AssignWaterData(SolidShoreFoamLake(0.0f, 1.0f));
+    Config coverage = WaterConfig(base);
+    coverage.waterDebugView = kFoamCoverageDebugView;
+    coverage.waterShoreWaves = 0.0f;
+    vf_test_set_config(&coverage);
+    vf_test_disable_wave_simulation(1);
+    const WaterView high = MakeWaterView({370, 0, 40}, {398, 0, -3});
+    const WaterView low = MakeWaterView({340, 0, 8}, {398, 0, -1});
+    BasinClient client(h, high);
+    WaterFrame frame;
+    const auto highPixel = BeachPixel(high, kAngleCheckDepth);
+    const BYTE fromAbove = CoverageAt(client.Render(frame).image, highPixel);
+    client.UseView(low);
+    const auto lowPixel = BeachPixel(low, kAngleCheckDepth);
+    const BYTE fromLow = CoverageAt(client.Render(frame).image, lowPixel);
+    vf_test_disable_wave_simulation(0);
+    std::printf("     shallow foam coverage at %.2f yd of water: %u from above (pixel %u,%u), %u from a low camera "
+                "(pixel %u,%u)\n",
+                kAngleCheckDepth, fromAbove, highPixel.first, highPixel.second, fromLow, lowPixel.first,
+                lowPixel.second);
+    Check(assigned && fromAbove >= kVisibleFoamCoverage && fromLow >= kVisibleFoamCoverage &&
+              std::abs(static_cast<int>(fromAbove) - static_cast<int>(fromLow)) <= kMaxAngleCoverageDifference,
+          "the shallow-water foam fades by the water's depth, so a low camera sees the same band as one from above");
+    const Config on = WaterConfig(base);
+    vf_test_set_config(&on);
+    AssignWaterData(MakeSyntheticWaterData());
+}
+
+std::pair<int, int> SwashChangeOverOnePeriod(BasinClient& client, std::pair<UINT, UINT> nearShore,
+                                             std::pair<UINT, UINT> deep)
+{
+    WaterFrame frame;
+    int nearLow = 255, nearHigh = 0, deepLow = 255, deepHigh = 0;
+    for (int sample = 0; sample < kSwashClockSamples; ++sample)
+    {
+        vf_test_set_water_seconds(kFrameSeconds + kLakeSwashPeriod * sample / kSwashClockSamples);
+        const Image image = client.Render(frame).image;
+        const int nearGreen = image.At(nearShore.first, nearShore.second)[1];
+        const int deepGreen = image.At(deep.first, deep.second)[1];
+        nearLow = std::min(nearLow, nearGreen);
+        nearHigh = std::max(nearHigh, nearGreen);
+        deepLow = std::min(deepLow, deepGreen);
+        deepHigh = std::max(deepHigh, deepGreen);
+    }
+    vf_test_set_water_seconds(kFrameSeconds);
+    return {nearHigh - nearLow, deepHigh - deepLow};
+}
+
+void CheckWaterlineWashesInAndOut(Harness& h, const Config& base)
+{
+    const bool assigned = AssignWaterData(SolidShoreFoamLake(1.0f, 0.0f));
+    const WaterView view = MakeWaterView({360, 0, 40}, {398, 0, -3});
+    BasinClient client(h, view);
+    const auto nearShore = BeachPixel(view, kSwashNearShoreDepth);
+    const auto deep = WaterSurfacePixel(view, kSwashDeepWaterX, 0.0f);
+    vf_test_disable_wave_simulation(1);
+    Config waves = WaterConfig(base);
+    waves.waterFoam = 0.0f;
+    waves.waterShoreWaves = 1.0f;
+    vf_test_set_config(&waves);
+    const std::pair<int, int> moving = SwashChangeOverOnePeriod(client, nearShore, deep);
+    Config still = waves;
+    still.waterShoreWaves = 0.0f;
+    vf_test_set_config(&still);
+    const std::pair<int, int> stillChange = SwashChangeOverOnePeriod(client, nearShore, deep);
+    vf_test_disable_wave_simulation(0);
+    std::printf("     over one lake swash period: %d levels at %.2f yd of water and %d in deep water with "
+                "WaterShoreWaves=1, %d and %d with 0\n",
+                moving.first, kSwashNearShoreDepth, moving.second, stillChange.first, stillChange.second);
+    Check(assigned && moving.first >= kMinSwashChange && moving.second == 0,
+          "WaterShoreWaves=1 washes the waterline in and out over time near the shore and leaves deep water alone");
+    Check(stillChange.first == 0 && stillChange.second == 0, "WaterShoreWaves=0 keeps the waterline still");
     const Config on = WaterConfig(base);
     vf_test_set_config(&on);
     AssignWaterData(MakeSyntheticWaterData());
@@ -1894,22 +2045,27 @@ UINT RowAtElevation(const WaterView& v, UINT column, float elevation)
     return best;
 }
 
-void CheckSkyReflectionsCarryTheSkysFog(Harness& h, const Config& base)
+struct SkyReflectionComparison
+{
+    bool rendered;
+    float worst;
+};
+
+SkyReflectionComparison CompareSkyAndItsReflection(Harness& h, const Config& fogConfig)
 {
     WaterView view = MakeWaterView(kLowEye, kLowEyeTarget);
     for (uint32_t& sky : view.water.skyColors)
         sky = kBlackSky;
     BasinClient client(h, view);
-    Config heightFog = WaterConfig(base);
-    heightFog.dataMode = 0;
-    heightFog.farFog = 0.0f;
-    heightFog.waterQuality = 1;
-    heightFog.waterWaves = 0.0f;
-    heightFog.waterDebugView = kReflectionDebugView;
-    vf_test_set_config(&heightFog);
+    Config mirror = fogConfig;
+    mirror.waterQuality = 1;
+    mirror.waterWaves = 0.0f;
+    mirror.waterShoreWaves = 0.0f;
+    mirror.waterDebugView = kReflectionDebugView;
+    vf_test_set_config(&mirror);
     WaterFrame reflection;
     const WaterFrameResult mirrored = client.Render(reflection);
-    Config skyFog = heightFog;
+    Config skyFog = mirror;
     skyFog.debugView = kFogRadianceDebugView;
     skyFog.waterDebugView = 0;
     vf_test_set_config(&skyFog);
@@ -1931,8 +2087,62 @@ void CheckSkyReflectionsCarryTheSkysFog(Harness& h, const Config& base)
                     direct, waterRow, reflected, (reflected / std::fmax(direct, kMinComparedFogRadiance) - 1) * 100);
         worst = std::fmax(worst, mismatch);
     }
-    Check(mirrored.began && sky.fogRendered && worst <= kMaxSkyReflectionFogMismatch,
+    return {mirrored.began && sky.fogRendered, worst};
+}
+
+void CheckSkyReflectionsCarryTheSkysFog(Harness& h, const Config& base)
+{
+    Config heightFog = WaterConfig(base);
+    heightFog.dataMode = 0;
+    heightFog.farFog = 0.0f;
+    const SkyReflectionComparison result = CompareSkyAndItsReflection(h, heightFog);
+    Check(result.rendered && result.worst <= kMaxSkyReflectionFogMismatch,
           "a sky reflection carries the height fog the fog pass puts on the sky at the same elevation");
+    const Config on = WaterConfig(base);
+    vf_test_set_config(&on);
+}
+
+FogParams DarkFogBeforeBrightDistantFog()
+{
+    FogParams fog = {};
+    for (FogLayer& l : fog.layers)
+    {
+        l.exponent = 1.0f;
+        l.shadowDensity = 1.0f;
+        l.endDistance = kLayeredFogLimit;
+        l.isotropic = 1.0f;
+    }
+    FogLayer& nearLayer = fog.layers[0];
+    nearLayer.density = kNearFogDensity;
+    FogLayer& farLayer = fog.layers[1];
+    farLayer.density = kFarFogDensity;
+    farLayer.strength = kFarFogStrength;
+    farLayer.exponent = kFarFogExponent;
+    for (int c = 0; c < 3; ++c)
+    {
+        nearLayer.emissive[c] = nearLayer.shadowEmissive[c] = kNearFogEmissive;
+        farLayer.emissive[c] = farLayer.shadowEmissive[c] = kFarFogEmissive;
+    }
+    fog.maxDistance = kLayeredFogLimit;
+    fog.farClip = kLayeredFogFarClip;
+    fog.farLimit = kLayeredFogFarClip;
+    fog.horizonStart = kLayeredFogHorizonStart;
+    fog.lightAboveHorizon = 1.0f;
+    fog.linear = true;
+    return fog;
+}
+
+void CheckSkyReflectionsLayerTheirFogInOrder(Harness& h, const Config& base)
+{
+    const FogParams layered = DarkFogBeforeBrightDistantFog();
+    vf_test_force_fog_params(&layered);
+    Config forced = WaterConfig(base);
+    forced.exposure = 1.0f;
+    const SkyReflectionComparison result = CompareSkyAndItsReflection(h, forced);
+    vf_test_force_fog_params(nullptr);
+    Check(result.rendered && result.worst <= kMaxLayeredSkyReflectionFogMismatch,
+          "a sky reflection seen through dark near fog shows as little of the bright distant fog behind it as the fog "
+          "pass shows on the sky");
     const Config on = WaterConfig(base);
     vf_test_set_config(&on);
 }
@@ -2154,6 +2364,7 @@ void CheckFoamTintsAreLinear(BasinClient& client, const Config& base)
     foamOnly.waterReflections = 0.0f;
     foamOnly.waterSpecular = 0.0f;
     foamOnly.waterFoam = 1.0f;
+    foamOnly.waterShoreWaves = 0.0f;
     vf_test_set_config(&foamOnly);
     vf_test_disable_wave_simulation(1);
     WaterFrame frame;
@@ -2472,9 +2683,13 @@ void CheckWaterPass(Harness& h, const std::wstring& outDir, const std::string& w
     CheckFailedFoamMaskUploadsRetry(client, base);
     CheckFlatWaterHasNoCrestFoam(client, base);
     CheckShoreFoamWidthFollowsTheSlope(h, base);
+    CheckShoreFoamFollowsItsOwnSetting(h, base);
+    CheckShallowFoamIgnoresTheCameraAngle(h, base);
+    CheckWaterlineWashesInAndOut(h, base);
     CheckOccluderEdgesKeepWaveDetail(h, base);
     CheckReflectionsCarryTheirSourcesFog(h, base);
     CheckSkyReflectionsCarryTheSkysFog(h, base);
+    CheckSkyReflectionsLayerTheirFogInOrder(h, base);
     CheckCrestFoamAccumulates(client, base, waterMask.image);
     CheckEachWaveFoamLayerReadsItsChannel(client, base, waterMask.image);
     CheckResetKeepsWater(h, client, base);

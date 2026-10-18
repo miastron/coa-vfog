@@ -1071,6 +1071,7 @@ StormSilhouette RenderStormSilhouette(Harness& m, const WorldCamera& camera, boo
     Config cfg = MultisamplingConfig(true);
     cfg.classicNoise = classicNoise;
     cfg.localLightIntensity = kStormLampIntensity;
+    cfg.lightShafts = false;
     vf_test_set_config(&cfg);
     StormSilhouette s;
     DrawSilhouetteScene(m, camera, kSilhouetteSceneColour, kSilhouetteSceneColour);

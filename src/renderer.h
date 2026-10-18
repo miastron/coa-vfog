@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "engine.h"
+#include "engine_shadows.h"
 #include "fog_data.h"
 #include "fog_model.h"
 #include "gpu_timing.h"
@@ -11,6 +12,8 @@
 #include <d3d9.h>
 
 void ForceFogParams(const FogParams* fog);
+FogParams FogParamsFor(const FrameInputs& in, const Config& cfg, const AuthoredFog* authored);
+uint32_t LoggedLightsSignature(const AuthoredFog& fog);
 
 class Renderer
 {
@@ -46,6 +49,7 @@ private:
 
     struct CompositeChoice
     {
+        bool shadowed;
         bool lit;
         bool noisy;
         int quality;
@@ -73,6 +77,7 @@ private:
     bool EnsureShaders(IDirect3DDevice9* dev);
     bool EnsureSplitComposites(IDirect3DDevice9* dev);
     void ReleaseSplitComposites();
+    IDirect3DPixelShader9* const* MarchShaders(bool shadowed, bool lit, bool noisy) const;
     IDirect3DPixelShader9* CompositeShader(const CompositeChoice& choice, bool splitSamples) const;
     void MarkSilhouetteSamples(IDirect3DDevice9* dev, IDirect3DSurface9* sampleDepth, const D3DVIEWPORT9& vp);
     void DrawSamplesMarked(IDirect3DDevice9* dev, DWORD marker, IDirect3DPixelShader9* shader, const float* side);
@@ -101,6 +106,8 @@ private:
     void BindTexture(IDirect3DDevice9* dev, DWORD stage, IDirect3DBaseTexture9* tex, bool linear);
     void BindWrappedVolume(IDirect3DDevice9* dev, DWORD stage, IDirect3DVolumeTexture9* volume);
     FogParams DrawableFog(IDirect3DDevice9* dev, const FogParams& fog);
+    void BindSunShadows(IDirect3DDevice9* dev, const FrameInputs& in, const WorldShadowInputs& shadows,
+                        const float* control);
     void UploadLayerNoise(IDirect3DDevice9* dev, const FogParams& fog, const float* camera, long long now);
     bool RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDirect3DSurface9* target,
                       const D3DSURFACE_DESC& depthDesc, const FrameInputs& in, const Config& cfg, FogPass pass);
@@ -111,15 +118,21 @@ private:
     IDirect3DPixelShader9* m_litMarch[3] = {};
     IDirect3DPixelShader9* m_noisyMarch[3] = {};
     IDirect3DPixelShader9* m_litNoisyMarch[3] = {};
+    IDirect3DPixelShader9* m_shadowedMarch[3] = {};
+    IDirect3DPixelShader9* m_shadowedNoisyMarch[3] = {};
+    IDirect3DPixelShader9* m_shadowedLitMarch[3] = {};
+    IDirect3DPixelShader9* m_shadowedLitNoisyMarch[3] = {};
     IDirect3DPixelShader9* m_temporal = nullptr;
     IDirect3DPixelShader9* m_historyDepthShader = nullptr;
     IDirect3DPixelShader9* m_composite[3] = {};
     IDirect3DPixelShader9* m_noisyComposite[3] = {};
     IDirect3DPixelShader9* m_litComposite[3] = {};
+    IDirect3DPixelShader9* m_shadowedComposite[3] = {};
     IDirect3DPixelShader9* m_silhouetteMask = nullptr;
     IDirect3DPixelShader9* m_splitComposite[3] = {};
     IDirect3DPixelShader9* m_noisySplitComposite[3] = {};
     IDirect3DPixelShader9* m_litSplitComposite[3] = {};
+    IDirect3DPixelShader9* m_shadowedSplitComposite[3] = {};
     bool m_splitCompositesUnavailable = false;
     IDirect3DPixelShader9* m_drawnMarch = nullptr;
     IDirect3DPixelShader9* m_drawnComposite = nullptr;
@@ -165,6 +178,7 @@ private:
     Config m_prevConfig;
     int m_prevMap = -1;
     int m_prevLightSlot = -1;
+    int m_prevShadowMode = -1;
     float m_prevWorldToView[16] = {};
     float m_prevProj[16] = {};
     float m_prevCam[3] = {};

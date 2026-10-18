@@ -10,11 +10,22 @@
 #define LOCAL_LIGHTS 1
 #endif
 
+#ifndef SUN_SHADOWS
+#define SUN_SHADOWS 0
+#endif
+
+#ifndef SHADOW_STEP_STRIDE
+#define SHADOW_STEP_STRIDE 1
+#endif
+
 static const int kFogLayers = 4;
 static const int kRegistersPerLayer = 6;
 static const float kGoldenRatioFraction = 0.618034;
+static const float kShadowedTransmittanceFloor = 1.0 / 512;
 static const bool kMarchesLocalLights = LOCAL_LIGHTS;
-static const bool kUnrollsLayers = !kMarchesLocalLights;
+static const bool kTracesSunShadows = SUN_SHADOWS;
+static const int kShadowStepStride = SHADOW_STEP_STRIDE;
+static const bool kUnrollsLayers = !kMarchesLocalLights && !kTracesSunShadows;
 
 float4 cLight : register(c9);
 float4 cMarch : register(c11);
@@ -110,6 +121,8 @@ float FarClip()
     return cMarch.w;
 }
 
+#include "vf_sun_shadows.hlsli"
+
 float PhaseHG(float g, float cosAngle)
 {
     float r = (1 - g) / sqrt(max(1 + g * g - 2 * g * cosAngle, 1e-6));
@@ -166,13 +179,6 @@ float WeightedVariation(float variation, float weight)
     return kSamplesAuthoredNoise ? lerp(1, variation, weight) : variation;
 }
 
-float DensityProfile(FogLayer layer, MarchRay ray, float distanceAlongRay, float variation)
-{
-    float density = DistanceCurve(layer, distanceAlongRay) *
-                    HeightProfile(layer, ray.cameraHeight + ray.heightPerYard * distanceAlongRay);
-    return layer.densityVariation > 0 ? density * WeightedVariation(variation, layer.densityVariation) : density;
-}
-
 #include "vf_local_lights.hlsli"
 
 struct StepVariation
@@ -197,8 +203,9 @@ float LayerVariation(StepVariation step, MarchRay ray, float sampleDistance)
 }
 
 void AccumulateLayer(FogLayer layer, int layerIndex, float noiseDensity, float cosToLight, float skyDensityScale,
-                     float stepStart, float stepEnd, float jitter, MarchRay ray, StepVariation stepVariation,
-                     inout float3 radiance, inout float opticalDepth)
+                     float stepStart, float stepEnd, float jitter, float sunVisibility, MarchRay ray,
+                     StepVariation stepVariation, inout float3 radiance, inout float opticalDepth,
+                     inout float4 stepProfiles)
 {
     float layerStart = max(stepStart, layer.start);
     float layerLength = max(min(stepEnd, layer.limit) - layerStart, 0);
@@ -213,9 +220,11 @@ void AccumulateLayer(FogLayer layer, int layerIndex, float noiseDensity, float c
     float variation = 1;
     [branch] if (layer.densityVariation > 0 && cDensityVariation.x > 0)
         variation = WeightedVariation(LayerVariation(stepVariation, ray, sampleDistance), layer.densityVariation);
-    float directLight = 1 - shadow;
-    float layerOpticalDepth = layer.density * skyDensityScale * layerLength * distanceCurve * heightProfile *
-                              shadowDensityScale * variation * noiseDensity;
+    float directLight = (1 - shadow) * sunVisibility;
+    float profile = distanceCurve * heightProfile * variation;
+    stepProfiles += LayerSelector(layerIndex) * profile;
+    float layerOpticalDepth = layer.density * skyDensityScale * layerLength * profile * shadowDensityScale *
+                              noiseDensity;
     float3 emissive = lerp(layer.emissive, layer.shadowEmissive, shadow);
     [flatten] if (kSamplesAuthoredNoise && layerIndex < kNoisyLayers)
         emissive = lerp(emissive, LayerNoiseFade(layerIndex), 1 - noiseDensity);
@@ -230,7 +239,8 @@ float3 StepSamplePosition(MarchRay ray, float stepStart, float stepEnd, float ji
 }
 
 void AccumulateLayers(float4 noiseDensities, float cosToLight, float skyMask, float upward, float stepStart,
-                      float stepEnd, float jitter, MarchRay ray, inout float3 radiance, inout float opticalDepth)
+                      float stepEnd, float jitter, float sunVisibility, MarchRay ray, inout float3 radiance,
+                      inout float opticalDepth, inout float4 stepProfiles)
 {
     StepVariation stepVariation = StepVariationAt(ray, stepStart, stepEnd, jitter);
     [branch] if (kUnrollsLayers)
@@ -239,7 +249,8 @@ void AccumulateLayers(float4 noiseDensities, float cosToLight, float skyMask, fl
         {
             FogLayer layer = LoadConstantFogLayer(j);
             AccumulateLayer(layer, j, noiseDensities[j], cosToLight, SkyDensityScale(layer, skyMask, upward),
-                            stepStart, stepEnd, jitter, ray, stepVariation, radiance, opticalDepth);
+                            stepStart, stepEnd, jitter, sunVisibility, ray, stepVariation, radiance, opticalDepth,
+                            stepProfiles);
         }
     }
     else
@@ -249,7 +260,8 @@ void AccumulateLayers(float4 noiseDensities, float cosToLight, float skyMask, fl
             FogLayer layer = LoadFogLayer(j);
             float noiseDensity = kSamplesAuthoredNoise ? dot(noiseDensities, j == int4(0, 1, 2, 3) ? 1 : 0) : 1;
             AccumulateLayer(layer, j, noiseDensity, cosToLight, SkyDensityScale(layer, skyMask, upward), stepStart,
-                            stepEnd, jitter, ray, stepVariation, radiance, opticalDepth);
+                            stepEnd, jitter, sunVisibility, ray, stepVariation, radiance, opticalDepth,
+                            stepProfiles);
         }
     }
 }
@@ -294,6 +306,7 @@ float4 IntegrateFogAtDepth(float2 pixel, float depth, float jitter)
     float3 inScatteredRadiance = 0;
     float transmittance = 1;
     const float stepFraction = 1.0 / STEPS;
+    float sunVisibility = 1;
     [loop] for (int s = 0; s < STEPS; s++)
     {
         float startFraction = s * stepFraction;
@@ -302,16 +315,26 @@ float4 IntegrateFogAtDepth(float2 pixel, float depth, float jitter)
         [branch] if (kUnrollsLayers && stepStart >= layersEnd)
             break;
         float stepEnd = marchLength * endFraction * endFraction;
+        [flatten] if (kShadowStepStride == 1)
+            sunVisibility = 1;
+        [branch] if (kTracesSunShadows && s % kShadowStepStride == 0 && SunShadowsEnabled() &&
+                     transmittance > kShadowedTransmittanceFloor)
+        {
+            float groupFraction = (s + kShadowStepStride * jitter) * stepFraction;
+            float sampleDistance = marchLength * groupFraction * groupFraction;
+            sunVisibility = SunVisibility(viewDirection * sampleDistance, sampleDistance, jitter, 1 - skyMask);
+        }
         float3 stepRadiance = 0;
         float stepOpticalDepth = 0;
+        float4 stepProfiles = 0;
         float4 noiseDensities = LayerNoiseDensities(StepSamplePosition(ray, stepStart, stepEnd, jitter));
-        AccumulateLayers(noiseDensities, cosToLight, skyMask, upward, stepStart, stepEnd, jitter, ray, stepRadiance,
-                         stepOpticalDepth);
+        AccumulateLayers(noiseDensities, cosToLight, skyMask, upward, stepStart, stepEnd, jitter, sunVisibility, ray,
+                         stepRadiance, stepOpticalDepth, stepProfiles);
         [branch] if (kMarchesLocalLights && lightCoverage.nextEndpoint <= stepStart)
             lightCoverage = ChordCoverageFrom(lightCoverage, viewDirection, stepStart, marchLength);
         [branch] if (kMarchesLocalLights && StepMeetsLocalLights(lightCoverage, stepEnd))
             stepRadiance += LocalLightScattering(lightCoverage, lightDensityScales, ray, stepStart, stepEnd,
-                                                 noiseDensities);
+                                                 noiseDensities, stepProfiles);
         [branch] if (stepOpticalDepth > 0)
         {
             float stepOpacity = stepOpticalDepth < 1e-3

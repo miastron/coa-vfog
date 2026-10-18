@@ -41,8 +41,10 @@ constexpr int kLoggedDives = 60;
 constexpr float kTypedDensity = 3.3712f;
 constexpr Hotkey kCtrlF8 = {VK_F8, true, false, false};
 
-const char* const kEditedWaterKeys[] = {"Water",        "WaterQuality",        "WaterWaves",    "WaterFoam",
-                                        "WaterRipples", "WaterClientSplashes", "WaterDebugView"};
+const char* const kEditedWaterKeys[] = {"Water",          "WaterQuality",    "WaterWaves",
+                                        "WaterFoam",      "WaterShoreFoam",  "WaterShoreWaves",
+                                        "WaterRipples",   "WaterClientSplashes",
+                                        "WaterDebugView"};
 
 std::vector<std::string> IniLines(const std::string& text)
 {
@@ -81,7 +83,8 @@ bool IsEditedWaterKeyLine(const std::string& line)
 bool SameWaterSettings(const Config& a, const Config& b)
 {
     return a.water == b.water && a.waterQuality == b.waterQuality && a.waterWaves == b.waterWaves &&
-           a.waterWind == b.waterWind && a.waterFoam == b.waterFoam && a.waterReflections == b.waterReflections &&
+           a.waterWind == b.waterWind && a.waterFoam == b.waterFoam && a.waterShoreFoam == b.waterShoreFoam &&
+           a.waterShoreWaves == b.waterShoreWaves && a.waterReflections == b.waterReflections &&
            a.waterSpecular == b.waterSpecular && a.waterClarity == b.waterClarity &&
            a.waterZoneColors == b.waterZoneColors && a.waterRipples == b.waterRipples &&
            a.waterClientSplashes == b.waterClientSplashes && a.waterDebugView == b.waterDebugView;
@@ -96,7 +99,8 @@ void CheckShippedWaterDefaults(const std::wstring& shippedIni)
           "WaterRipples defaults to 0.5, in the code and in the shipped INI");
     const std::vector<std::string> lines = IniLines(ReadText(shippedIni));
     const char* const shippedLines[] = {"Water=1",          "WaterQuality=2",     "WaterWaves=1.0",
-                                        "WaterWind=2.0",    "WaterFoam=1.0",      "WaterReflections=1.0",
+                                        "WaterWind=2.0",    "WaterFoam=1.0",      "WaterShoreFoam=1.0",
+                                        "WaterShoreWaves=1.0", "WaterReflections=1.0",
                                         "WaterSpecular=1.0", "WaterClarity=1.0", "WaterZoneColors=0.5",
                                         "WaterRipples=0.5", "WaterClientSplashes=0", "WaterDebugView=0"};
     int found = 0;
@@ -128,6 +132,8 @@ void CheckWaterSettingsSave(const std::wstring& outDir, const std::wstring& ship
     edited.waterQuality = 3;
     edited.waterWaves = 1.5f;
     edited.waterFoam = 0.25f;
+    edited.waterShoreFoam = 1.75f;
+    edited.waterShoreWaves = 0.0f;
     edited.waterRipples = 1.5f;
     edited.waterClientSplashes = true;
     edited.waterDebugView = 6;
@@ -161,7 +167,8 @@ void CheckWaterSettingsSave(const std::wstring& outDir, const std::wstring& ship
         return std::find(saved.begin(), saved.end(), std::string(line)) != saved.end();
     };
     Check(has("Water=0") && has("WaterQuality=3") && has("WaterWaves=1.5") && has("WaterFoam=0.25") &&
-              has("WaterRipples=1.5") && has("WaterClientSplashes=1") && has("WaterDebugView=6") &&
+              has("WaterShoreFoam=1.75") && has("WaterShoreWaves=0") && has("WaterRipples=1.5") &&
+              has("WaterClientSplashes=1") && has("WaterDebugView=6") &&
               has("WaterWind=2.0"),
           "the saved water lines hold the edited values and the untouched ones keep their text");
 }

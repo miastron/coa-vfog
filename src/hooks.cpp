@@ -7,6 +7,8 @@
 #include "fog_model.h"
 #include "forever_look.h"
 #include "log.h"
+#include "spell_lights.h"
+#include "texture_tint.h"
 #include "transparent_fog.h"
 #include "water_classify.h"
 #include "water_renderer.h"
@@ -58,6 +60,12 @@ DWORD g_lastReload = 0;
 const char* g_fogNotDrawnReason = "";
 StatusLog g_fogLog;
 StatusLog g_godRayLog;
+
+uintptr_t g_particleRenderTarget = engine::kParticleEmitterRender;
+uintptr_t g_meshBatchDrawTarget = engine::kM2BatchDraw;
+uintptr_t g_worldSceneSlot = engine::kWorldM2Scene;
+bool g_spellLightHooksInstalled = false;
+int g_spellLightsObserved = 0;
 
 uintptr_t g_m2BatchFogTarget = engine::kM2BatchFogTarget;
 uintptr_t g_glarePassTarget = engine::kGlarePassTarget;
@@ -312,8 +320,18 @@ void LeaveTransparentFogWorld()
     DisarmTransparentFog();
 }
 
+void PublishSpellLights()
+{
+    const Config& cfg = GlobalConfig().Get();
+    GlobalSpellLights().Publish();
+    const bool observed = g_spellLightHooksInstalled && cfg.enable && cfg.localLights && cfg.spellLights &&
+                          cfg.spellLightIntensity > 0.0f;
+    g_spellLightsObserved = observed ? 1 : 0;
+}
+
 void OnFrameBegin()
 {
+    PublishSpellLights();
     g_renderedThisFrame = false;
     ResetTransparentFogFrame();
     if (FogDrawsInPlaceOfStockFog())
@@ -1157,6 +1175,21 @@ extern "C" void __cdecl vf_on_water_pass_end()
     }
 }
 
+extern "C" void __cdecl vf_on_single_particle_render(uintptr_t emitter, uintptr_t sceneRender)
+{
+    engine::ObserveSingleParticleRender(GlobalSpellLights(), emitter, sceneRender, g_worldSceneSlot);
+}
+
+extern "C" void __cdecl vf_on_batched_particle_render(uintptr_t emitter, uintptr_t callerFrame)
+{
+    engine::ObserveBatchedParticleRender(GlobalSpellLights(), emitter, callerFrame, g_worldSceneSlot);
+}
+
+extern "C" void __cdecl vf_on_mesh_batch_drawn(uintptr_t sceneRender)
+{
+    engine::ObserveMeshBatchDraw(GlobalSpellLights(), sceneRender, g_worldSceneSlot);
+}
+
 extern "C" void __cdecl vf_on_liquid_begin()
 {
     __try
@@ -1309,6 +1342,85 @@ const void* RetargetGlarePassThunk(uintptr_t target)
 {
     g_glarePassTarget = target;
     return reinterpret_cast<const void*>(&GlarePassThunk);
+}
+
+__declspec(naked) static void SingleParticleRenderThunk()
+{
+    __asm {
+        push ecx
+        push dword ptr [esp + 0x10]
+        push dword ptr [esp + 0x10]
+        push dword ptr [esp + 0x10]
+        call dword ptr [g_particleRenderTarget]
+        pop ecx
+        cmp dword ptr [g_spellLightsObserved], 0
+        je rendered
+        pushad
+        push esi
+        push ecx
+        call vf_on_single_particle_render
+        add esp, 8
+        popad
+    rendered:
+        ret 0xC
+    }
+}
+
+__declspec(naked) static void BatchedParticleRenderThunk()
+{
+    __asm {
+        push ecx
+        push dword ptr [esp + 0x10]
+        push dword ptr [esp + 0x10]
+        push dword ptr [esp + 0x10]
+        call dword ptr [g_particleRenderTarget]
+        pop ecx
+        cmp dword ptr [g_spellLightsObserved], 0
+        je rendered
+        pushad
+        push ebp
+        push ecx
+        call vf_on_batched_particle_render
+        add esp, 8
+        popad
+    rendered:
+        ret 0xC
+    }
+}
+
+__declspec(naked) static void MeshBatchDrawThunk()
+{
+    __asm {
+        push ecx
+        call dword ptr [g_meshBatchDrawTarget]
+        pop ecx
+        cmp dword ptr [g_spellLightsObserved], 0
+        je drawn
+        pushad
+        push ecx
+        call vf_on_mesh_batch_drawn
+        add esp, 4
+        popad
+    drawn:
+        ret
+    }
+}
+
+const void* RetargetMeshBatchDrawThunk(uintptr_t target)
+{
+    g_meshBatchDrawTarget = target;
+    return reinterpret_cast<const void*>(&MeshBatchDrawThunk);
+}
+
+void RetargetParticleRenderThunks(uintptr_t target, uintptr_t worldSceneSlot, const void*& single,
+                                  const void*& batched)
+{
+    g_particleRenderTarget = target;
+    g_worldSceneSlot = worldSceneSlot;
+    g_spellLightsObserved = 1;
+    GlobalSpellLights().UseTextureTints(&engine::TextureTint);
+    single = reinterpret_cast<const void*>(&SingleParticleRenderThunk);
+    batched = reinterpret_cast<const void*>(&BatchedParticleRenderThunk);
 }
 
 __declspec(naked) static void ScreenEffectsThunk()
@@ -1554,6 +1666,26 @@ bool InstallTransparentFogHooks()
     VF_LOG_INFO("transparent fog hooks installed: M2 batch fog 0x%08X, glare pass 0x%08X (TransparentFog=%d)",
                 static_cast<unsigned>(engine::kM2BatchFogSite), static_cast<unsigned>(engine::kGlarePassSite),
                 GlobalConfig().Get().transparentFog ? 1 : 0);
+    return true;
+}
+
+bool InstallSpellLightHooks()
+{
+    const CallSite sites[] = {
+        {engine::kSingleParticleRenderSite, engine::kParticleEmitterRender, &SingleParticleRenderThunk},
+        {engine::kBatchedParticleRenderSite, engine::kParticleEmitterRender, &BatchedParticleRenderThunk},
+        {engine::kM2BatchDrawSite, engine::kM2BatchDraw, &MeshBatchDrawThunk},
+    };
+    if (!engine::SpellLightCodeMatches(ClientCodeView()))
+        return false;
+    if (!SitesHoldTheClientCalls(sites, "spell light") || !PatchCallSites(sites))
+        return false;
+    GlobalSpellLights().UseTextureTints(&engine::TextureTint);
+    g_spellLightHooksInstalled = true;
+    VF_LOG_INFO("spell light hooks installed: particle render 0x%08X and 0x%08X, mesh batch 0x%08X (SpellLights=%d)",
+                static_cast<unsigned>(engine::kSingleParticleRenderSite),
+                static_cast<unsigned>(engine::kBatchedParticleRenderSite),
+                static_cast<unsigned>(engine::kM2BatchDrawSite), GlobalConfig().Get().spellLights ? 1 : 0);
     return true;
 }
 

@@ -22,6 +22,16 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
 - **Smooth swaps**: lights fade in and out over about a second when they take or give up a slot; a light entering
   from the edge of the view shines at once.
 - **Storm fog over water**: no more bright lines on grazing water in noisy fog near point lights.
+- **Shores and reflections**: the waterline washes in and out (`WaterShoreWaves`), shore foam has its own strength
+  (`WaterShoreFoam`) and looks the same from any camera angle, and sky reflections are fogged front to back so night
+  reflections are no brighter than the sky.
+- **Cheaper fog lights**: shorter light spheres and no second density sampling in the lit march.
+- **Spell lights** (`SpellLights`): glowing spell effects light the fog around them in their particles' colour.
+- **Lights follow their objects** (`LightsFollowObjects`): a lamp or fire the game no longer draws in view, because
+  it is beyond its object fade distance or hidden, takes its light with it.
+- **Light shafts are back** (`LightShafts`, `WorldShadows`): upstream removed them in its cost cut, and the sun or
+  moon halo then shone through cliffs and terrain. They return in their own shaders with a quarter to half of
+  their former trace work (see Light shafts).
 - **Releases**: every push to `st0ny-dev` builds the install zip and keeps only the newest build:
   [CoAVolFog-Win32.zip](https://github.com/Raz0r1337/coa-vfog/releases/latest/download/CoAVolFog-Win32.zip).
 
@@ -35,9 +45,15 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
   With Classic layers it returns only across the edge of Classic coverage and where the Classic layers are
   too thin to hide the far clip.
 - **Forward scattering** around the visible sun or moon sprite (Henyey–Greenstein phase).
+- **Light shafts**: terrain, buildings, trees and characters block the sun or moon light in the fog, so the halo
+  shines only where the light reaches (`LightShafts`). The client's world shadow maps include casters outside the
+  view (`WorldShadows`); a trace through the image's depth covers what they do not.
 - **Local lights**: up to eight native point lights in view scatter into the medium with the client's constant,
   linear and quadratic attenuation. Light/ray intersections preserve small light volumes between march samples.
   Every light scatters with one shared phase (`LocalLightPhase`), and one brighter than 1 keeps its intensity.
+- **Spell lights**: the additive particles and mesh batches (shields, auras) of every drawn spell model become one
+  light per model, in their colour times their texture's mean colour, sharing the eight slots (`SpellLights`,
+  `SpellLightIntensity`).
 - **Interior transitions**: the camera's native WMO blend reduces outdoor layers and sunlight while preserving
   the interior's native fog colour and range.
 - **Authored noise**: drifting fog banks where the Classic layers carry the modern client's noise, mostly in
@@ -48,7 +64,8 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
   Layers with authored noise use that instead.
 - **God rays** (optional): a radial blur of the bright sky around the sun.
 - **Modern water** on lakes, rivers, the sea and indoor pools: FFT waves from Forever's wave tiles, refraction,
-  depth absorption and in-scattering, foam on wave crests, along shores and in shallow water, a sun or moon glint,
+  depth absorption and in-scattering, foam on wave crests, along shores and in shallow water, small waves washing in
+  and out at the waterline, a sun or moon glint,
   and reflections of the scene with the sky as a fallback. The zone's own water colours can tint it
   (`WaterZoneColors`). Magma, slime, custom non-water liquids and water seen from below keep the client's look.
   Players, creatures, pets and mounts that wade or swim drag a V-shaped wake and stir the water as they start and
@@ -79,6 +96,24 @@ is interpolated from the current frame's march where the taps lie on the pixel's
 across them and no light's sphere meets the ray; thin silhouettes that every tap misses are marched at full
 resolution. Under authored noise the lit composite interpolates the filtered fog wherever the taps lie on the
 pixel's plane, lights and curvature aside, because its own march takes the noise at its mean (see Authored noise).
+
+**Light shafts.** With `LightShafts=1` the march and composite use shadowed variants, which compile the sun shadow
+code in and march the layers in a loop rather than unrolled. A step's sun or moon visibility scales only the direct
+light of every layer; emissive light and density are unchanged, so fog in shadow keeps its ambient colour. The
+visibility is taken once per group of steps (every 4th, 3rd and 2nd step at `Quality` 1, 2 and 3) at a point
+jittered across the group and held for the group, and not at all once the ray's transmittance is below 1/512. The
+lit noisy march evaluates it at every step, because holding it across a group exceeds the 32 temporary registers of
+ps_3_0 there.
+
+A point's visibility comes first from the client's world shadow maps (see Native world shadows): the near, middle
+and far environment maps in that order, each with one comparison tap (hardware PCF for `D24X8`) and a coverage that
+fades over the outer 30% of the map, so the first map that covers the point decides it. What no map covers falls back
+to a screen-space trace that projects the ray toward the light up to the far clip, clips it to the viewport and
+checks 12 perspective-correct depth intervals, stopping at the first occluder. For rays that end on opaque geometry
+with the light behind it, depth silhouettes conservatively cover the hidden space behind them, so a nearer tree or
+character cannot reveal sunlight through a mountain; sky rays keep a finite occluder thickness. The character map
+then darkens what it covers. Without the client's maps (`WorldShadows=0`, its shadows off, or an unrecognised image)
+the trace covers everything.
 
 Every full-screen pass draws one triangle whose edges lie outside the viewport (NDC −1.5 and 4.5), so it covers every
 4x sample of the edge columns; Direct3D 9 maps NDC −1 onto the first column's centres.
@@ -154,7 +189,11 @@ parameters, 256² or 128² per tile, normalised to 256² so the wave height does
 yields slopes, slope variance and a persistent foam state per tile. The shading ports Forever's deferred water pass
 (Beer–Lambert absorption, Henyey–Greenstein in-scattering, the EnvBRDF reflection weight, foam compositing); its
 unknown sun lookup table is replaced by a GGX lobe and its reflection probe by a screen-space march against the
-pre-water copies. Frames without queued water skip the pass entirely.
+pre-water copies. Frames without queued water skip the pass entirely. Since the fog is drawn after the water, each
+reflection carries the fog along its reflected path: the fog layers are integrated analytically over eight segments
+spaced like the march's steps and composited front to back, so dark near fog hides bright distant fog in a
+reflection as it does on the sky (one layer-weighted average over the whole path made night reflections of the sky
+several times brighter than the sky in Classic zones whose layers differ in colour).
 
 **Ripples.** Units in the water drive Forever's local displacement recurrence, `next = 0.97·edge·(0.5·(L + D + R +
 U) − C.g)`, output `(next, C.r)` (R the height, G the previous one, edge `saturate(16·min(u, 1 − u, v, 1 − v))`), on
@@ -373,6 +412,33 @@ Engine notes behind the code:
   writes (Gx state 15, `0x6C55BE`, dispatched as `D3DRS_ZWRITEENABLE` at `0x6A8FC7`). Suppressing the writes
   keeps glyph quads out of the depth the fog is integrated against, where they would end fog rays at the text,
   while keeping the draw and its depth test. The later name/icon path at `0x4FB042` is left in place.
+- Native world shadows. The 12340 image registers the map-shadow callbacks at `0x7BD3A0`: matrix construction
+  `0x7BAC10`, cascade setup `0x7BAFD0`, caster gathering `0x7BD200`, and rendering `0x7BBC50`. Exterior shadow quality
+  is `[0xD43154]`; `[0xB1D51C]` means its resources need rebuilding. Qualities 1 and 2 supply the dynamic character
+  map; qualities 3 and 4 add three environment caches, and quality 5 updates cascaded environment maps. The default
+  character extent is 20 yd (`0x875E6E`); environment extents are 40, 160 and 640 yd (`0xB1D520`). Caster gathering
+  traverses map chunks and tests their shadow frusta (`0x7BC490`, `0x7BCC00`, `0x7BC890`, `0x7BCF20`), so visibility
+  includes geometry outside the camera image, within the client's loaded and culled shadow scene.
+  `0x8750B0` constructs four view-space-to-shadow transforms, packs three float4 rows each at `0xD43348`, and uploads
+  all twelve rows at `0x87450A`. It inverts the current Gx view (`0x7BAE25`), builds the light view, and applies a Y
+  flip and a depth scale of 1/4000 (`0x875197`, `0x7BC105`). Both final XY axes map to UV with `0.5*x + 0.5`; Z is
+  normalized linear light-view depth. The constant receiver biases are 0.4 yd for the character and first environment
+  map, 0.8 yd for the second and 1.6 yd for the third (`0x7BAF4E`–`0x7BAFBE`), with no surface-normal dependence.
+  The native direction comes from `[[0xCE04A8] + 0x7C]`, has its Z multiplied by five and capped at -1.2, and is
+  normalized before storage at `0xD43180` (`0x7BB570`–`0x7BB628`). It points from the light into the world; volumetric
+  direct scattering reverses it. This direction follows the client's surface-shadow lighting, not the visible
+  celestial sprite. The optional sprite-centred god rays remain a separate effect.
+  Texture handles are `[0xD43250 + 4*hardwareComparison]` and
+  `[0xD43290 + 0x3C*cascade + 4*[0xD432C8 + 0x3C*cascade]]`, with hardware comparison selected by `[0xD43014]`.
+  A texture resource holds its Gx texture at `+0x44`, or its cache at `+0x5C` holds the Gx texture at `+0x18`
+  (`0x4B6CB0`–`0x4B6D80`); Gx `+0x38` is the D3D texture passed to `SetTexture` (`0x6A492E`, `0x6A88D6`). Native
+  format 11 is `R32F` (`0xA2F81C`), while format 12 explicitly creates `D24X8` depth textures (`0x6A2C62`,
+  `0x6A2D01`). The shipped `ShadowMapSL.bls` pixel shader writes `max(lightViewZ/4000, 0)` to red. The shipped
+  `Terrain2_pcf.bls` uses `texldl` with `(0.5*XY+0.5, Z, 0)` for hardware depth comparison; the native texture flags
+  select linear minification and magnification with no mip filtering for that path (`0x875DC1`, `0x6A4944`).
+  Capture checks the image and relevant instruction bytes, the live formats and matrix values, and texture device
+  ownership. It retains D3D references only for the fog draw, releases them on every exit, and falls back when the
+  native maps are unavailable. These static contracts and offline tests do not establish in-game visual alignment.
 - Native glare. `0x4F9213` (`E8 58 76 2F 00`) calls the sun/moon glare pass `0x7F0870`, which is not patched.
   Its draw `0x9AC400` adds the `sunGlare`/`moonGlare` quads (`D3DBLEND_SRCALPHA`, `D3DBLEND_ONE`) at depth
   `[0.9990234375, 1]`, and its update `0x9AC3C0` runs a GPU occlusion query against the current world depth
@@ -481,6 +547,53 @@ Engine notes behind the code:
   recorded from a disassembly, only this structure, so the guard is looser than the byte guards of the other sites
   and the patcher itself lists No. 70 as untested. Lights whose model is not drawn then keep their last position
   and colour; removal of the model still unregisters them (`0x824D30`).
+  The stamp is the M2 scene's frame counter at `+0x14`, which the scene animation `0x821A20` advances first
+  (`0x821A2D`, `83 46 14 01`). The world scene render `0x79A870`, reached from the world render at `0x4F909F`
+  through `0x77EFF0`, animates the scene at `0x79AC13` before it draws, so by the opaque M2 pass `0x4F911D`, where
+  the fog captures its lights, every model queued for drawing this frame has stamped its lights: `AnimateST`
+  `0x828A00` writes `[[model+0x28]+0x14]` to each light's `+4` (`0x828B88`, `0x828B9C`, `89 46 6C`), and the map
+  light query compares the same two words (`0x81E53F`, `8B 41 04 8B 55 FC 3B 42 14`). Doodads are queued only
+  within their fade distance, by size: up to 1, 4, 15 and 100 yd across they fade out over the last 5, 10, 15 and
+  20 yd before 30, 100, 200 and 750 yd, the middle three scaled by the environment detail (`0x78F570`,
+  `[0xADF3A0]`), and larger ones at 1250 yd.
+- Spell particles. `CParticleEmitter2::Render` `0x97EA60` is a thiscall with three stack arguments (frame of
+  reference, vertex buffer, first-in-batch) that returns with `ret 0xC` (`0x97EAFF`). It resets the emitter's world
+  bounds at `+0x218` (`0x97EA81`), returns early when the live list count `+0x50` is 0 and clears the rendered count
+  `+0x1C` (`0x97EABA`); otherwise the vertex build `0x97E580` grows the bounds over the rendered particles, transforms
+  them back to world space and stores the rendered count. The M2 renderer calls it from two sites. The single draw
+  `0x8214E0` keeps the scene renderer in ESI and its current element `[esi+0x50]` holds the emitter at `+0x18`
+  (`0x8214E7`, `8B F1 8B 46 50 57 8B 78 18`); the call is at `0x821633` (`E8 28 D4 15 00`, ECX = EDI). The batched
+  draw `0x821100` reuses its third argument slot `[ebp+0x10]` as the cursor into the element index list and indexes
+  the element array `[ebp+0xC]` by 0x44 (`0x821411`, `8B 55 10 8B 02 8B 55 0C 8B C8 C1 E1 04 03 C8`) for the emitter
+  at `+0x18` (`0x821420`, `8B 74 8A 18`); the call is at `0x82143F` (`E8 1C D6 15 00`, ECX = ESI). An element's model
+  is at `+4` (`0x821169`, `8B 4F 04`), a model's scene at `+0x28` (`0x824141`, `8B 56 28`) and its shared data at
+  `+0x2C`, whose file name starts at `+0x3C` (`0x8245BE`, `8B 46 2C 53 57 83 C0 3C`). The emitter's blend is at
+  `+0xD0` and its material flags at `+0xD4` (`0x8214F0`–`0x8214F9`); the model loader `0x832EA0` maps the file's
+  blend 4 (add) to 3 and 3 (no-alpha add) to 10. The colour track pointer is at `+0xD8` with the value count at
+  `+8` and the values, RGB floats 0..255, at `[+0xC]` (`0x9795DA`); flag `0x10` at `+0x134` replaces them with the
+  three colours at `+0xF4` (`0x979642`, `0x979652`). The alpha track, fixed16 values in the same layout, is at
+  `+0xDC`, scaled by `+0x130` (`0x979F01`, `0x979F0F`, `0x9794F7`). `0x82143F` and `0x821633` are the only calls to
+  `0x97EA60` in the image (a byte search). The hook replaces both calls with thunks that call the original, then read
+  the emitter after its bounds were built, and installs only when every recorded byte above matches. Particles draw
+  after the fog's light capture, so a frame's spell lights reach the fog on the next frame.
+- Spell meshes and textures. The M2 draw `0x823130` dispatches on the element type through a jump table
+  (`0x823A6C`–`0x823A81`); type 0 calls `CM2SceneRender::DrawBatch` `0x8203B0` at `0x823A83` (`E8 28 C9 FF FF`,
+  ECX = ESI = the scene renderer), its only call in the image, and the batch draw returns with a bare `ret`
+  (`0x820615`). The batch draw stores the element's batch `+0x28` and skin section `+0x2C` at renderer `+0x88` and
+  `+0x90` (`0x8203D8`) and its material, the data's material array `[+0x74]` indexed by the batch's `+0xA`, at
+  `+0x98` (`0x8203ED`); a material's blend is the word at `+2` (`0x82021F`), 3 no-alpha add and 4 add. The renderer
+  holds the model's data at `+0x48`. The batch colour is the model's diffuse `+0x1A0` (`0x8201E9`) times, when the
+  batch's colour index `+8` is below the data's colour count `+0x48`, the current value `+8` of the model's colour
+  `[+0xA0]` at a stride of 0x20 (`0x82023F`, `0x820251`); the element's alpha is at `+0xC`. The first texture is the
+  model's texture `[+0xA4]` at the data's texture combo `[+0x84]` indexed by the batch's `+0x10`, bounded by the
+  texture count `+0x50` (`0x81F4E6`–`0x81F508`). A section's bone is the data's bone combo `[+0x7C]` at the
+  section's `+0xE` (`0x820486`); the bone matrices `[model+0x98]` map model space to view space and the scene's
+  inverse view is at `+0xC4` (`0x828AC2`, the light placement in `AnimateST`), and the section holds its bounds
+  centre at `+0x20` and radius at `+0x2C` (the M2 skin layout). A `CTexture` holds its `CGxTex` at `+0x44`
+  (`0x4B6D4B`), which holds the Direct3D texture the device binds at `+0x38` (`0x6A492E`); textures are created in
+  the managed pool (`0x6A2C00`), and an emitter's texture is at `+0x128` (`0x821563`). The tint locks the smallest
+  mip level of 4 to 16 texels a side read-only, once per texture, and only for an object whose interface table
+  matches a texture the client created through the wrapper.
 - Interiors. `0x795D40` stores the camera's WMO instance at `[0xCD87A4]`, its active group IDs at `[0xCDB0DC]`
   and their count at `[0xCDB0D8]`. The instance's root is at `+0xF4`; the root's loaded flag is `+0x1E0`, its
   group count `+0x1F4` (set at `0x7D7F18`, bounded at `0x7AE467`) and inline group pointers start at `+0x1F8`;
@@ -642,8 +755,10 @@ and wading-in units at `WaterRipples=0.5`, each as the shaded frame, its normals
 `vfog_harness --scene performance` times the fog passes at 1920×1080 at each quality on one street: derived
 layers with no point lights, eight flood lights or eight street lamps, Classic layers at the harbour with and
 without the lamps (skipped if `fogdata.bin` beside `CoAVolFog.dll` does not resolve the harbour), and the shipped
-`LogLevel=1`. It prints `quality,case,point_lights,median_ms,p95_ms` of GPU time; this is a controlled renderer
-cost, not a game frame-rate test.
+`LogLevel=1`, each with light shafts, and three cases with `LightShafts=0`. It prints
+`quality,case,point_lights,median_ms,p95_ms` of GPU time; this is a controlled renderer cost, not a game frame-rate
+test. The harness has no world shadow maps, so the shafts are timed with the screen-space trace alone; on an AMD
+Radeon 780M at 1080p it added 0.6 ms at `Quality=1`, 0.8–1.1 ms at 2 and 1.6–1.9 ms at 3 without point lights.
 It also times the harbour in a full storm and the colour grading pass; `--samples 4` creates a 4x device.
 
 ## Install
@@ -728,8 +843,12 @@ its comments describe every key. In the game, `Ctrl+F7` opens the same settings 
 | `ClassicPhase` | 0 | Classic sun and moon scattering: 0 phase peaks at 1 toward the light, 1 energy-normalised |
 | `LocalLights`, `LocalLightIntensity` | 1, 1 | Scatter up to eight world point lights in view; intensity 0..8 |
 | `LocalLightPhase` | 0.3 | Henyey–Greenstein g of every point light in the fog, −0.9..0.9 (a calibration) |
+| `SpellLights`, `SpellLightIntensity` | 1, 1 | Spell effects light the fog (needs `LocalLights=1`); intensity 0..8 |
+| `LightsFollowObjects` | 1 | A light in view whose object the client stopped drawing fades out with it |
 | `InteriorAware`, `InteriorDensity` | 1, 0.15 | Fade outdoor layers indoors, keeping this fraction of their density |
 | `InteriorFarFog` | 1.0 | Native distance-fog density retained indoors (0..1); lower values clear dungeon haze |
+| `LightShafts` | 1 | Terrain, buildings and trees block the sun or moon light in the fog |
+| `WorldShadows` | 1 | Use the client's world shadow maps when available (needs `LightShafts`) |
 | `GodRays` | 0 | Radial sky rays, 0 = off |
 | `GlowCompensation` | 1 | Pre-compensate the fog for the client's glow |
 | `ForeverGlow` | 0 | 1 gives the client's glow Forever's per-light amount where Classic lights cover the camera |
@@ -747,7 +866,9 @@ its comments describe every key. In the game, `Ctrl+F7` opens the same settings 
 | `WaterQuality` | 2 | 1 128² waves, sky reflections only; 2 256², scene reflections; 3 256², finer reflections |
 | `WaterWaves` | 1 | Wave height 0..2; 0 = flat water |
 | `WaterWind` | 2 | Wind driving the waves, 0.5..10 |
-| `WaterFoam`, `WaterReflections` | 1, 1 | Foam and reflection strength 0..2 |
+| `WaterFoam`, `WaterReflections` | 1, 1 | Crest foam and reflection strength 0..2 |
+| `WaterShoreFoam` | 1 | Shore and shallow-water foam 0..2 |
+| `WaterShoreWaves` | 1 | Waves washing in and out at the waterline 0..2; 0 = a still waterline |
 | `WaterSpecular` | 1 | Sun or moon glint 0..4 |
 | `WaterClarity` | 1 | How far you see into the water 0.25..4 |
 | `WaterZoneColors` | 0.5 | Tint by the zone's own water colours 0..1 |
@@ -783,12 +904,38 @@ Forever in the game, so by default colours still differ from Classic.
   https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-ps-3-0), and lower
   quality does not reduce that. An unsupported required shader disables volumetric fog for that device and logs
   its name, HRESULT and the shader caps; native fog remains the fallback.
-- Scene geometry does not shadow the fog's sunlight.
+- Light shafts follow the client's shadow-light direction where its world shadow maps cover the ray, and the
+  visible sun or moon elsewhere; the two can differ. The screen-space trace cannot see blockers outside the view,
+  and its conservative treatment of depth silhouettes can darken fog where geometry hidden behind them would let
+  light through. Native shadow-map alignment in the game is unverified.
 - Local lighting captures the current M2 scene's point-light table. It does not create spotlight cones or local
-  shadows, and coverage of WMO-only lights is unverified. A light's sphere is capped at 200 yd and its attenuation
-  denominator floored at 1; it is a candidate at any camera distance while its sphere meets the view and the client
-  keeps it in its light table (see World lights), and a far light in view costs each march ray its chord test, with the
-  scattering evaluated only where the ray crosses its sphere.
+  shadows, and coverage of WMO-only lights is unverified. A light's sphere ends where its falloff leaves 1/64 of its
+  peak (1/256 before; in the harness benchmark, eight 130 yd lights shrink to 65 yd and the frame changes by at most 1
+  level of 255), is capped at 200 yd, and its attenuation denominator is floored at 1; it is a candidate at any camera
+  distance while its sphere meets the view and the client keeps it in its light table (see World lights), and a far
+  light in view costs each march ray its chord test, with the scattering evaluated only where the ray crosses its
+  sphere. The light scattering of a march step takes the density the step's layers were sampled at instead of sampling
+  the layers again at each quadrature point. Together the two cut the lit march's cost with eight large lights by
+  about a third at Quality 2 (harness, Radeon 780M at 1080p); the in-game gain is not yet measured.
+- With `LightsFollowObjects=1` the capture skips a light whose stamp lags the scene's by more than two frames while
+  its centre lies at least 2 yd inside the view: its model is beyond its fade distance, occluded or otherwise not
+  drawn. The stabiliser then fades it out over its usual second and back in when the model is drawn again, so the
+  light arrives with its object rather than before it. A light whose centre is outside the view keeps shining
+  whether its model is drawn or not, as `LightStay` intends; a lamp hidden behind a wall or inside a building while
+  its centre is in view now goes dark with its model, and a far light no longer takes a slot or keeps the lit march
+  running on its own. The stamp bytes are checked separately; when they differ, every light shines as before. The
+  skip is harness-checked on a fake light table; its effect in game is not yet verified.
+- Spell lights come from the additive particles and additive mesh batches of models under `Spells\`, one light per
+  drawn model at the centre of its glows' bounds. A particle glow's colour is the mean of the emitter's colour track,
+  weighted by its mean alpha and rendered particle count (full at 8 particles); a mesh batch's is its batch colour
+  at the element's alpha, around its skin section's bounding sphere. Each is multiplied by its first texture's mean
+  colour scaled to a peak of 1 (weighted by texel alpha for the alpha-added blend), so a white track on a blue
+  texture lights the fog blue. The sphere reaches 3 yd plus three times the glows' half-diagonal, at most 20 yd.
+  Textures in formats other than DXT1/3/5 and 16- and 32-bit RGB keep the track colour. Alpha-blended glows,
+  ribbons, model particles and spell effects stored outside `Spells\` do not glow. Spell lights fade in and out over
+  0.15 s instead of a second and compete for the eight slots with the world's lights by the same priority, so a dim
+  spell far away loses to a nearby torch. The reading, the tint and the thunks are harness-checked on fake client
+  memory and a harness texture; the mesh batch glows and tints are not yet seen in game.
 - The owner reported on 2026-10-15 that the flicker was gone in game with the stabiliser, the tolerant table walk and
   `LightStay` together; no `CoAVolFog.log` of that test has been read, which of the three ended it was not separated,
   the view-only selection without a camera-distance bound and the edge margin are harness-checked only, and the exe
@@ -818,6 +965,12 @@ Forever in the game, so by default colours still differ from Classic.
 - `ForeverGlow` sets only the amount: the client's glow adds `g·blur²`, Forever's a linear term.
 - Ripples are harness-checked only; walkers (2.5 yd/s) push a mound rather than a V, and every unit is stamped round.
 - The ripple step, texel, window, footprint, fades, splash and contact limits are choices, not recovered values.
+- Shore waves (`WaterShoreWaves`) are an addition of this fork with no Forever counterpart, harness-checked only: their
+  periods, drawdowns and wavelengths per class, the waterline fade and the wet-shore shade are chosen by eye. They
+  only draw the waterline back from the client's mesh; the shore distance is estimated from the water's depth (four
+  yards per yard), so on steep banks they are narrow. The shore and shallow-water foam bands are measured by that
+  depth (the shallow-water band at 1.5 yards of path per yard of depth) instead of the view depth, so they no longer
+  change with the camera's angle. Rivers take the lake's shore-foam strength, which Forever leaves at 0 for them.
 - The sprite hold is global: units past the 32 nearest, the 24 yd window or the modern water get no wake at all.
 - The client's footstep spray (`0x723A50`) is not hooked, and game objects such as boats make no ripples.
 - The zone lights' edge fade distance is chosen here: their `TransitionType` is 0 in every row and the modern
