@@ -7,6 +7,7 @@
 #include "fog_model.h"
 #include "gpu_timing.h"
 #include "msaa_depth.h"
+#include "terrain_shadows.h"
 #include "transparent_fog.h"
 
 #include <d3d9.h>
@@ -121,6 +122,8 @@ private:
     FogParams DrawableFog(IDirect3DDevice9* dev, const FogParams& fog);
     void BindSunShadows(IDirect3DDevice9* dev, const FrameInputs& in, const WorldShadowInputs& shadows,
                         const float* control);
+    bool UpdateTerrainShadows(IDirect3DDevice9* dev, const FrameInputs& in, const Config& cfg);
+    void BindTerrainShadows(IDirect3DDevice9* dev, bool active);
     void UploadLayerNoise(IDirect3DDevice9* dev, const FogParams& fog, const float* camera, long long now);
     bool RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDirect3DSurface9* target,
                       const D3DSURFACE_DESC& depthDesc, const FrameInputs& in, const Config& cfg, FogPass pass);
@@ -167,6 +170,7 @@ private:
     IDirect3DTexture9* m_localLightData = nullptr;
     IDirect3DVolumeTexture9* m_densityNoise = nullptr;
     IDirect3DVolumeTexture9* m_authoredNoise = nullptr;
+    TerrainShadowMap m_terrainShadows;
     AuthoredNoiseScroll m_noiseScroll;
     long long m_noiseTicks = 0;
     IDirect3DTexture9* m_probeTarget = nullptr;

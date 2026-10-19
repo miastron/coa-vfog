@@ -1,3 +1,5 @@
+#include "vf_terrain_shadows.hlsli"
+
 #ifndef SHADOW_TRACE_TAPS
 #define SHADOW_TRACE_TAPS 12
 #endif
@@ -123,6 +125,9 @@ float ScreenSpaceSunVisibility(float3 viewPosition, float sampleDistance, float 
 
 float SunVisibility(float3 viewPosition, float sampleDistance, float jitter, float surfaceMask)
 {
+    float terrainLit = TerrainSunVisibility(CameraPositionWorld() + ViewToWorldDirection(viewPosition));
+    [branch] if (terrainLit <= 0)
+        return 0;
     float lit = 0;
     float uncovered = 1;
     [branch] if (EnvironmentShadowMapsPresent())
@@ -140,5 +145,5 @@ float SunVisibility(float3 viewPosition, float sampleDistance, float jitter, flo
         BlendWorldShadowMap(sCharacterShadow, kCharacterShadowMap, viewPosition, characterLit, characterUncovered);
         lit = min(lit, characterLit + characterUncovered);
     }
-    return lit;
+    return lit * terrainLit;
 }

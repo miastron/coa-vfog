@@ -1,6 +1,7 @@
 #include "renderer.h"
 
 #include "engine_shadows.h"
+#include "engine_terrain.h"
 #include "fog_data.h"
 #include "fog_model.h"
 #include "fullscreen_triangle.h"
@@ -94,6 +95,8 @@ constexpr UINT kSunShadowRegister = 10;
 constexpr UINT kSunShadowLightRegister = 54;
 constexpr UINT kViewToShadowRegister = 55;
 constexpr UINT kViewToShadowRegisters = 3 * kWorldShadowMapCount;
+constexpr DWORD kTerrainShadowStage = 5;
+constexpr UINT kTerrainShadowRegister = 67;
 constexpr int kHardwareShadowModeBit = 8;
 constexpr double kMaxNoiseStepSeconds = 0.25;
 constexpr UINT kRayScale = 4;
@@ -455,6 +458,7 @@ void Renderer::ReleaseDefaultPool()
     SafeRelease(m_localLightData);
     SafeRelease(m_densityNoise);
     SafeRelease(m_authoredNoise);
+    m_terrainShadows.ReleaseTexture();
     DropPendingDepthProbe();
     SafeRelease(m_probeTarget);
     SafeRelease(m_probeReadback);
@@ -1095,6 +1099,29 @@ void Renderer::BindSunShadows(IDirect3DDevice9* dev, const FrameInputs& in, cons
         BindTexture(dev, kFirstWorldShadowStage + i, shadows.textures[i], shadows.hardwareComparison);
 }
 
+bool Renderer::UpdateTerrainShadows(IDirect3DDevice9* dev, const FrameInputs& in, const Config& cfg)
+{
+    static const bool supported = engine::TerrainContractSupported();
+    if (!cfg.lightShafts || !supported)
+        return false;
+    const int loadedBefore = m_terrainShadows.Window().LoadedChunks();
+    const bool active = m_terrainShadows.Update(dev, in.camPos, in.mapId, in.toLight, engine::ClientTerrain());
+    const int loaded = m_terrainShadows.Window().LoadedChunks();
+    if ((loadedBefore == 0) != (loaded == 0))
+        VF_LOG_INFO("terrain shadows: %d of %d chunks around the camera loaded on map %d", loaded,
+                    kTerrainWindowChunks * kTerrainWindowChunks, in.mapId);
+    return active;
+}
+
+void Renderer::BindTerrainShadows(IDirect3DDevice9* dev, bool active)
+{
+    const TerrainHeightWindow& window = m_terrainShadows.Window();
+    const Float4 control = {static_cast<float>(window.FirstVertexRow()), static_cast<float>(window.FirstVertexCol()),
+                            active ? 1.0f : 0.0f, 0.0f};
+    dev->SetPixelShaderConstantF(kTerrainShadowRegister, &control.x, 1);
+    BindTexture(dev, kTerrainShadowStage, active ? m_terrainShadows.Texture() : nullptr, false);
+}
+
 FogParams Renderer::DrawableFog(IDirect3DDevice9* dev, const FogParams& fog)
 {
     if (!AnyLayerNoise(fog))
@@ -1478,6 +1505,7 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     if (cfg.lightShafts && cfg.worldShadows)
         engine::AcquireWorldShadows(dev, worldShadows.inputs);
     const WorldShadowInputs& shadows = worldShadows.inputs;
+    const bool terrainShadows = UpdateTerrainShadows(dev, in, cfg);
     const int shadowMode = shadows.count | (shadows.hardwareComparison ? kHardwareShadowModeBit : 0);
 
     float common[9][4] = {
@@ -1561,6 +1589,7 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     const Float4 sunShadow = {cfg.lightShafts ? 1.0f : 0.0f, shadows.hardwareComparison ? 1.0f : 0.0f,
                               shadows.count > 1 ? 1.0f : 0.0f, shadows.count > 0 ? 1.0f : 0.0f};
     BindSunShadows(dev, in, shadows, &sunShadow.x);
+    BindTerrainShadows(dev, terrainShadows);
     uint32_t pointLightCount = cfg.localLights ? std::min(in.localLights.pointLightCount, kMaxLocalPointLights) : 0;
     Float4 localConstants[32] = {};
     for (uint32_t i = 0; i < pointLightCount; ++i)

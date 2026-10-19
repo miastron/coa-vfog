@@ -35,7 +35,7 @@ set(VF_INCLUDES ${SHADER_DIR}/vf_common.hlsli ${SHADER_DIR}/vf_integrate.hlsli
                 ${SHADER_DIR}/vf_density_variation.hlsli
                 ${SHADER_DIR}/vf_authored_noise.hlsli ${SHADER_DIR}/vf_composite.hlsli
                 ${SHADER_DIR}/vf_sample_split.hlsli
-                ${SHADER_DIR}/vf_sun_shadows.hlsli)
+                ${SHADER_DIR}/vf_sun_shadows.hlsli ${SHADER_DIR}/vf_terrain_shadows.hlsli)
 set(VW_FFT_INCLUDES ${SHADER_DIR}/vw_fft_common.hlsli)
 set(VW_INCLUDES ${SHADER_DIR}/vf_common.hlsli ${SHADER_DIR}/vw_constants.hlsli ${SHADER_DIR}/vw_surface.hlsli
                 ${SHADER_DIR}/vw_optics.hlsli ${SHADER_DIR}/vw_reflection.hlsli)
@@ -186,6 +186,7 @@ add_library(CoAVolFog SHARED
     src/engine_actors.cpp
     src/engine_lights.cpp
     src/engine_shadows.cpp
+    src/engine_terrain.cpp
     src/fog_data.cpp
     src/fog_model.cpp
     src/forever_look.cpp
@@ -203,6 +204,7 @@ add_library(CoAVolFog SHARED
     src/settings_panel.cpp
     src/spell_lights.cpp
     src/status_log.cpp
+    src/terrain_shadows.cpp
     src/texture_filtering.cpp
     src/texture_tint.cpp
     src/transparent_fog.cpp
@@ -229,7 +231,7 @@ add_executable(vfog_harness tests/harness.cpp src/client_code.cpp src/client_lig
                src/texture_filtering.cpp
                src/fog_data.cpp src/fog_model.cpp src/gpu_timing.cpp src/log.cpp src/noise_volume.cpp
                src/transparent_fog.cpp src/water_contacts.cpp src/water_data.cpp src/water_spectrum.cpp
-               src/water_fft.cpp src/water_ripples.cpp src/status_log.cpp)
+               src/water_fft.cpp src/water_ripples.cpp src/status_log.cpp src/terrain_shadows.cpp)
 target_include_directories(vfog_harness PRIVATE src ${SHADER_OUT})
 target_compile_definitions(vfog_harness PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(vfog_harness PRIVATE CoAVolFog user32 ole32 windowscodecs)

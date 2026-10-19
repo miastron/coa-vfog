@@ -21,18 +21,15 @@ bool HistoryInvalid()
     return cTemporal.y <= 0;
 }
 
-float LightingHistoryWeight(float3 current, float3 history)
+float LightingHistoryRetention(float3 current, float3 history)
 {
-    float weight = HistoryWeight();
-    [branch] if (cTemporal.z > 0)
-    {
-        float3 difference = abs(current - history);
-        float peakDifference = max(difference.r, max(difference.g, difference.b));
-        float3 peak = max(current, history);
-        float brightness = max(0.05, max(peak.r, max(peak.g, peak.b)));
-        weight *= 1 - smoothstep(0.20, 0.40, peakDifference / brightness);
-    }
-    return weight;
+    [branch] if (cTemporal.z <= 0)
+        return 1;
+    float3 difference = abs(current - history);
+    float peakDifference = max(difference.r, max(difference.g, difference.b));
+    float3 peak = max(current, history);
+    float brightness = max(0.05, max(peak.r, max(peak.g, peak.b)));
+    return 1 - smoothstep(0.20, 0.40, peakDifference / brightness);
 }
 
 void CurrentNeighbourhoodRange(float2 uv, float4 centre, out float4 lowest, out float4 highest)
@@ -154,5 +151,9 @@ float4 main(float2 lowResTexel : VPOS) : COLOR0
     float4 highest;
     CurrentNeighbourhoodRange(uv, current, lowest, highest);
     float4 history = clamp(reprojected.value, lowest, highest);
-    return lerp(current, history, LightingHistoryWeight(current.rgb, history.rgb));
+    float retention = LightingHistoryRetention(current.rgb, history.rgb);
+    float4 present = current;
+    [branch] if (retention < 1)
+        present = lerp(SameSurfaceCurrentAverage(lowResTexel, viewZ, depthClass), current, retention);
+    return lerp(present, history, HistoryWeight() * retention);
 }

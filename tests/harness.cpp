@@ -22,6 +22,7 @@
 #include "water_ripples.h"
 #include "water_spectrum.h"
 #include "status_log.h"
+#include "terrain_shadows.h"
 #include "transparent_fog.h"
 
 #include <windows.h>
@@ -1846,6 +1847,7 @@ void CheckSettingsWindowKeepsItsSize(Harness& h, const PanelRect& expected, cons
 #include "water_settings_checks.h"
 #include "water_fft_checks.h"
 #include "water_mask_packing_checks.h"
+#include "terrain_shadow_checks.h"
 #include "water_contact_checks.h"
 #include "water_ripple_checks.h"
 #include "water_checks.h"
@@ -1924,6 +1926,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     authored_noise::CheckAuthoredNoise(classic);
     classic_phase::CheckClassicPhase();
     transparent_fog_checks::CheckStockFogFit(classic);
+    terrain_shadow_checks::CheckTerrainShadows();
 
     CreateDirectoryW(outDir.c_str(), nullptr);
     g_harnessLog = FullPath(outDir + L"\\harness.log");

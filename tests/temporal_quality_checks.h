@@ -473,19 +473,23 @@ void CheckTemporalQuality(IDirect3DDevice9* dev)
         return;
     const float accumulated = kCurrentFog * (1 - kWeight) + kHistoryFog * kWeight;
     Check(NearTemporal(fixture.Draw(), accumulated), "temporal matching surface reuses history");
-    Check(NearTemporal(fixture.Draw(true, 0, true), kCurrentFog),
+    Check(NearTemporal(fixture.Draw(true, 0, true), kSameSurfaceAverage),
           "moving light darkening rejects radiance history despite matching depth and neighbourhood range");
     Check(Fill(fixture.inputs[1], Grey(0.22f)) &&
               NearTemporal(fixture.Draw(true, 0, true), kCurrentFog * (1 - kWeight) + 0.22f * kWeight),
           "stable lighting retains the configured history weight for small radiance differences");
+    const float halfRetainedPresent = (kSameSurfaceAverage + kCurrentFog) * 0.5f;
     Check(Fill(fixture.inputs[1], Grey(kCurrentFog / 0.7f)) &&
-              NearTemporal(fixture.Draw(true, 0, true), kCurrentFog + (kCurrentFog / 0.7f - kCurrentFog) *
-                                                                          kWeight * 0.5f),
+              NearTemporal(fixture.Draw(true, 0, true),
+                           halfRetainedPresent + (kCurrentFog / 0.7f - halfRetainedPresent) * kWeight * 0.5f),
           "temporal lighting rejection fades continuously through intermediate radiance changes");
     Check(Fill(fixture.inputs[0], Grey(kCurrentFog), 5, Grey(kHistoryFog)) &&
               Fill(fixture.inputs[1], Grey(kCurrentFog)) &&
-              NearTemporal(fixture.Draw(true, 0, true), kHistoryFog),
-          "moving light brightening rejects stale radiance at the same surface depth");
+              NearTemporal(fixture.Draw(true, 0, true), (8.0f * kCurrentFog + kHistoryFog) / 9.0f),
+          "moving light brightening replaces stale radiance with the current same-surface average");
+    Check(FillTexels(fixture.inputs[0], kSize, [](UINT x, UINT y) { return Grey((x + y) % 2 ? 0.6f : 0.0f); }) &&
+              Fill(fixture.inputs[1], Grey(0.3f)) && NearTemporal(fixture.Draw(true, 0, true), 2.4f / 9.0f),
+          "rejected history shows the same-surface average instead of a stippled shadow sample");
     fixture.Reset();
     fixture.reproject[15] = 1.0f;
     Check(Fill(fixture.inputs[3], PackedDepth(2.0f, 0)) && NearTemporal(fixture.Draw(), accumulated),
