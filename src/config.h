@@ -48,6 +48,7 @@ struct Config
     bool lightsFollowObjects = true;
     bool spellLights = true;
     float spellLightIntensity = 1.0f;
+    float surfaceLights = 1.0f;
     bool interiorAware = true;
     float interiorDensity = 0.15f;
     float interiorFarFog = 1.0f;

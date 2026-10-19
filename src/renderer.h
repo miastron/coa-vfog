@@ -35,6 +35,7 @@ public:
     IDirect3DPixelShader9* DrawnComposite() const { return m_drawnComposite; }
     IDirect3DPixelShader9* DrawnSplitComposite() const { return m_drawnSplitComposite; }
     float DrawnGlowCompensation() const { return m_drawnGlowCompensation; }
+    unsigned SurfaceLightDraws() const { return m_surfaceLightDraws; }
 
 private:
     struct PendingDepthProbe
@@ -67,9 +68,21 @@ private:
         float glowToCompensate = 0.0f;
     };
 
+    struct SurfaceLightFrame
+    {
+        D3DVIEWPORT9 viewport;
+        float strength;
+        float reach;
+        uint32_t ambientColor;
+        uint32_t directColor;
+        float toLightInView[3];
+    };
+
     template <typename Passes>
     bool WithClientStateSaved(IDirect3DDevice9* dev, const SceneDepth& depth, Passes passes);
     void PrepareFullscreenPasses(IDirect3DDevice9* dev);
+    void LightSurfaces(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* target,
+                       const SurfaceLightFrame& frame);
     void CopySceneForGodRays(IDirect3DDevice9* dev, IDirect3DSurface9* target, const D3DVIEWPORT9& vp);
     void DrawGodRayMask(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, const GodRayFrame& rays);
     bool DrawGodRaysOverScene(IDirect3DDevice9* dev, const SceneDepth& depth, IDirect3DSurface9* target,
@@ -141,6 +154,7 @@ private:
     IDirect3DPixelShader9* m_rayMask = nullptr;
     IDirect3DPixelShader9* m_rayBlur = nullptr;
     IDirect3DPixelShader9* m_rayComposite = nullptr;
+    IDirect3DPixelShader9* m_surfaceLights = nullptr;
     IDirect3DPixelShader9* m_probe = nullptr;
     IDirect3DVertexDeclaration9* m_decl = nullptr;
     IDirect3DStateBlock9* m_state = nullptr;
@@ -186,6 +200,7 @@ private:
     UINT m_prevScale = 0;
     long long m_prevTicks = 0;
     unsigned m_frame = 0;
+    unsigned m_surfaceLightDraws = 0;
     unsigned m_logged = 0;
     long long m_summaryTicks = 0;
     long long m_probeTicks = 0;

@@ -76,6 +76,7 @@ EXPORTS
     vf_test_image_stats
     vf_test_image_status
     vf_test_image_world_done
+    vf_test_surface_light_draws
     vf_test_forever_look_guards
     vf_test_forever_look_status
     vf_test_use_world_hook_client

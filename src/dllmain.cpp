@@ -544,6 +544,11 @@ extern "C" void __cdecl vf_test_image_world_done()
     ImageQualityAtWorldDone();
 }
 
+extern "C" unsigned __cdecl vf_test_surface_light_draws()
+{
+    return SurfaceLightDraws(LatestFogDevice());
+}
+
 extern "C" int __cdecl vf_test_forever_look_guards(engine::CodeRange* ranges, int capacity)
 {
     return engine::ForeverLookGuardRanges(ranges, capacity);

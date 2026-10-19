@@ -133,6 +133,7 @@ public:
     bool ReadyToRender(const D3DVIEWPORT9& vp, const char** skip);
     const StockFogFit& LastStockFogFit() const { return m_renderer.LastStockFogFit(); }
     bool AdaptiveLightingHistory() const { return m_renderer.AdaptiveLightingHistory(); }
+    unsigned SurfaceLightDraws() const { return m_renderer.SurfaceLightDraws(); }
     IDirect3DPixelShader9* DrawnFogMarch() const { return m_renderer.DrawnMarch(); }
     IDirect3DPixelShader9* DrawnFogComposite() const { return m_renderer.DrawnComposite(); }
     IDirect3DPixelShader9* DrawnFogSplitComposite() const { return m_renderer.DrawnSplitComposite(); }
@@ -1323,6 +1324,11 @@ StockFogFit LastStockFogFit(FogDevice* device)
 bool AdaptiveLightingHistory(FogDevice* device)
 {
     return device && device->AdaptiveLightingHistory();
+}
+
+unsigned SurfaceLightDraws(FogDevice* device)
+{
+    return device ? device->SurfaceLightDraws() : 0;
 }
 
 void DrawnFogShaders(FogDevice* device, IDirect3DPixelShader9** march, IDirect3DPixelShader9** composite,

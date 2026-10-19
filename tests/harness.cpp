@@ -120,6 +120,7 @@ extern "C" __declspec(dllimport) void __cdecl vf_test_grading_stats(GradingStats
 extern "C" __declspec(dllimport) void __cdecl vf_test_image_stats(ImageStats*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_image_status(ImageQualityStatus*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_image_world_done();
+extern "C" __declspec(dllimport) unsigned __cdecl vf_test_surface_light_draws();
 extern "C" __declspec(dllimport) int __cdecl vf_test_forever_look_guards(engine::CodeRange*, int);
 extern "C" __declspec(dllimport) void __cdecl vf_test_forever_look_status(ForeverLookStatus*);
 extern "C" __declspec(dllimport) void __cdecl vf_test_use_world_hook_client(const FrameInputs*, int);
@@ -387,7 +388,7 @@ Rgb SampleRgb(const Image& img, int cx, int cy, int radius)
 }
 
 constexpr DWORD kFogPassTextureStages = 11;
-constexpr UINT kFogPassPixelConstants = 100;
+constexpr UINT kFogPassPixelConstants = 104;
 
 struct Sentinel
 {
@@ -1858,6 +1859,7 @@ void CheckSettingsWindowKeepsItsSize(Harness& h, const PanelRect& expected, cons
 #include "multisampling_checks.h"
 #include "texture_filtering_checks.h"
 #include "image_quality_checks.h"
+#include "surface_light_checks.h"
 
 void CheckFirstColumnIsFogged(const Image& transmittance, const D3DVIEWPORT9& world)
 {
@@ -1938,6 +1940,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
     texture_filtering_checks::CheckForcedSamplerFilter();
     texture_filtering_checks::CheckShippedSetting(FullPath(iniPath));
     image_quality_checks::CheckShippedSetting(FullPath(iniPath));
+    surface_light_checks::CheckShippedSetting(FullPath(iniPath));
 
     if (cpuOnly)
     {
@@ -2436,6 +2439,7 @@ int Run(const std::wstring& outDir, const std::string& dataPath, const std::wstr
 
     runtime_cost::CheckDisabledTemporalSkipsHistoryPasses(h, eye, at, proj, resized);
     CheckRendererSwitchesLitShaders(h);
+    surface_light_checks::CheckLightsOnSurfaces(h);
     authored_noise::CheckRendererDrawsStormNoise(h);
     runtime_cost::CheckFrameSummaryLogsClassicExtras(h);
     runtime_cost::CheckLocalLightLogLines(h);

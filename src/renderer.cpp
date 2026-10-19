@@ -60,6 +60,7 @@
 #include "ps_split_composite_high.h"
 #include "ps_split_composite_low.h"
 #include "ps_split_composite_mid.h"
+#include "ps_surface_lights.h"
 #include "ps_temporal.h"
 #include "ps_history_depth.h"
 #include "vs_fullscreen.h"
@@ -73,7 +74,12 @@
 
 namespace
 {
-constexpr UINT kPixelConstants = 100;
+constexpr UINT kPixelConstants = 104;
+constexpr UINT kSurfaceLightRegister = 100;
+constexpr UINT kSurfaceLightRegisters = 4;
+constexpr DWORD kSceneBeforeLightsStage = 1;
+constexpr DWORD kLocalLightStage = 8;
+constexpr float kSurfaceDisplayGamma = 2.2f;
 constexpr UINT kSampleSideRegister = 99;
 constexpr int kQualityLevels = 3;
 constexpr DWORD kAllStencilBits = 0xFF;
@@ -504,6 +510,7 @@ void Renderer::ReleaseAll()
     SafeRelease(m_rayMask);
     SafeRelease(m_rayBlur);
     SafeRelease(m_rayComposite);
+    SafeRelease(m_surfaceLights);
     SafeRelease(m_probe);
     SafeRelease(m_decl);
 }
@@ -664,6 +671,7 @@ bool Renderer::EnsureShaders(IDirect3DDevice9* dev)
         {"ps_ray_mask", g_ps_ray_mask, &m_rayMask},
         {"ps_ray_blur", g_ps_ray_blur, &m_rayBlur},
         {"ps_ray_composite", g_ps_ray_composite, &m_rayComposite},
+        {"ps_surface_lights", g_ps_surface_lights, &m_surfaceLights},
     };
     static const D3DVERTEXELEMENT9 kElements[] = {
         {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
@@ -1319,6 +1327,43 @@ void Renderer::PrepareFullscreenPasses(IDirect3DDevice9* dev)
     dev->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
 }
 
+void Renderer::LightSurfaces(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* target,
+                             const SurfaceLightFrame& frame)
+{
+    if (!CopyWorldViewport(dev, target, frame.viewport))
+        return;
+    const RECT world = ViewportRect(frame.viewport);
+    dev->SetRenderTarget(0, target);
+    dev->SetViewport(&frame.viewport);
+    dev->SetScissorRect(&world);
+    dev->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    dev->SetRenderState(D3DRS_COLORWRITEENABLE,
+                        D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+    dev->SetPixelShader(m_surfaceLights);
+    Float4 constants[kSurfaceLightRegisters] = {
+        {frame.strength, frame.reach, 0.0f, 0.0f},
+        {},
+        {},
+        {frame.toLightInView[0], frame.toLightInView[1], frame.toLightInView[2], 0.0f},
+    };
+    float* const ambient = &constants[1].x;
+    float* const direct = &constants[2].x;
+    UnpackColor(frame.ambientColor, ambient);
+    UnpackColor(frame.directColor, direct);
+    for (int channel = 0; channel < 3; ++channel)
+    {
+        ambient[channel] = std::pow(ambient[channel], kSurfaceDisplayGamma);
+        direct[channel] = std::pow(direct[channel], kSurfaceDisplayGamma);
+    }
+    dev->SetPixelShaderConstantF(kSurfaceLightRegister, &constants[0].x, kSurfaceLightRegisters);
+    BindTexture(dev, 0, depthTexture, false);
+    BindTexture(dev, kSceneBeforeLightsStage, m_sceneCopy, false);
+    BindTexture(dev, kLocalLightStage, m_localLightData, false);
+    DrawFullscreenTriangle(dev);
+    ++m_surfaceLightDraws;
+}
+
 void Renderer::CopySceneForGodRays(IDirect3DDevice9* dev, IDirect3DSurface9* target, const D3DVIEWPORT9& vp)
 {
     IDirect3DSurface9* raySurface = nullptr;
@@ -1578,6 +1623,10 @@ bool Renderer::RenderPasses(IDirect3DDevice9* dev, const SceneDepth& depth, IDir
     IDirect3DTexture9* const fogResult =
         temporalFiltering ? FilterWithHistory(dev, depthTexture, reproj, historyValid, cfg.temporal) : m_marchTarget;
 
+    if (pointLightCount > 0 && cfg.surfaceLights > 0.0f)
+        LightSurfaces(dev, depthTexture, target,
+                      {vp, cfg.surfaceLights, marchLightLimit, in.ambientColor, in.directColor,
+                       {toLightInView[0], toLightInView[1], toLightInView[2]}});
     if (rays)
         CopySceneForGodRays(dev, target, vp);
     if (raysNow)

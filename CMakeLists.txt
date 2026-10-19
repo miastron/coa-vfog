@@ -31,7 +31,8 @@ set(SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT})
 
 set(VF_INCLUDES ${SHADER_DIR}/vf_common.hlsli ${SHADER_DIR}/vf_integrate.hlsli
-                ${SHADER_DIR}/vf_local_lights.hlsli ${SHADER_DIR}/vf_density_variation.hlsli
+                ${SHADER_DIR}/vf_local_lights.hlsli ${SHADER_DIR}/vf_local_light_data.hlsli
+                ${SHADER_DIR}/vf_density_variation.hlsli
                 ${SHADER_DIR}/vf_authored_noise.hlsli ${SHADER_DIR}/vf_composite.hlsli
                 ${SHADER_DIR}/vf_sample_split.hlsli
                 ${SHADER_DIR}/vf_sun_shadows.hlsli)
@@ -138,6 +139,7 @@ vf_shader(ps_ray_mask vf_ray_mask.hlsl ps_3_0)
 vf_shader(ps_ray_blur vf_ray_blur.hlsl ps_3_0)
 vf_shader(ps_ray_composite vf_ray_composite.hlsl ps_3_0 /DSTEPS=16 /DLOCAL_LIGHTS=0)
 vf_shader(ps_probe vf_probe.hlsl ps_3_0)
+vf_shader(ps_surface_lights vf_surface_lights.hlsl ps_3_0)
 vf_shader(ps_depth_check vf_depth_check.hlsl ps_3_0)
 vf_shader(ps_grade vp_grade.hlsl ps_3_0)
 vf_shader(ps_sharpen vp_sharpen.hlsl ps_3_0)

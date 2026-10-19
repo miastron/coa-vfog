@@ -217,6 +217,10 @@ bool DrawLight(Config& c)
                       "Glowing spell effects and shields light the fog around them, in their own colour");
     changed |= Slider("Spell light intensity", c.spellLightIntensity, 0.0f, 8.0f, "%.2f",
                       "Brightness of the spell effects in the fog");
+    changed |= Slider("Lights on surfaces", c.surfaceLights, 0.0f, 2.0f, "%.2f",
+                      "Point and spell lights also light the ground, walls and models around them, without shadows, "
+                      "from the same eight lights as the fog (needs Local lights). Strongest at night, where the "
+                      "world's own light is dim. 0 = off");
     changed |= Toggle("Light shafts", c.lightShafts,
                       "Shadowed in-scattering: terrain, buildings and trees block the sun or moon light in the fog, "
                       "so it shines through only where the light reaches");

@@ -27,6 +27,8 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
   reflections are no brighter than the sky.
 - **Cheaper fog lights**: shorter light spheres and no second density sampling in the lit march.
 - **Spell lights** (`SpellLights`): glowing spell effects light the fog around them in their particles' colour.
+- **Lights on surfaces** (`SurfaceLights`): the same point and spell lights also light the ground, walls and models
+  around them, without shadows.
 - **Lights follow their objects** (`LightsFollowObjects`): a lamp or fire the game no longer draws in view, because
   it is beyond its object fade distance or hidden, takes its light with it.
 - **Light shafts are back** (`LightShafts`, `WorldShadows`): upstream removed them in its cost cut, and the sun or
@@ -54,6 +56,8 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
 - **Spell lights**: the additive particles and mesh batches (shields, auras) of every drawn spell model become one
   light per model, in their colour times their texture's mean colour, sharing the eight slots (`SpellLights`,
   `SpellLightIntensity`).
+- **Lights on surfaces** (`SurfaceLights`): the eight lights also light the opaque world around them, before the fog
+  composite, from the depth buffer and without shadows.
 - **Interior transitions**: the camera's native WMO blend reduces outdoor layers and sunlight while preserving
   the interior's native fog colour and range.
 - **Authored noise**: drifting fog banks where the Classic layers carry the modern client's noise, mostly in
@@ -168,6 +172,21 @@ afterwards; frames without volumetric fog keep the stock fog, and an unexpected 
 next frame. The client's glow (`screen + g·blur²`, with `g` from the day/night light) runs afterwards and would
 bleach bright fog to white, so fogged pixels are pre-compensated with the live glow amount. God rays use the
 remaining display highlight range after the glow and need a scene copy; without one they are omitted.
+
+**Lights on surfaces.** The client lights the ground and buildings only with the sun or moon and its ambient colour;
+its point lights reach models alone. With `SurfaceLights` above 0 and a light uploaded, one full-resolution pass
+after the march and before any scene copy or the composite copies the world viewport and redraws the pixels a light
+reaches. It rebuilds each pixel's view position from the depth copy, and its normal from the cross product of the
+smaller of the two depth differences to its horizontal and vertical neighbours, so silhouettes do not bend it. Each
+light adds `colour · falloff · fade · facing` with the march's falloff `1/max(a0 + a1·d + a2·d², 1)`, its
+sphere-edge fade and a facing wrapped by 0.25. That light falls on an albedo estimated from the scene in linear
+light (display gamma 2.2) divided by the client's own illuminant there, ambient plus direct colour times the facing
+to the sun or moon (at least 0.02, and the albedo at most 1); the pixel becomes `scene +
+albedo·light·SurfaceLights`. Ground lit dimly at night therefore takes a point light at nearly its full colour,
+while in daylight the same light adds to a much brighter scene and shows less. The sky, pixels beyond every light
+sphere and pixels a light adds under 1/1024 to are discarded and keep their colour. Translucent effects drawn after
+the pass are not lit, and models the client already lights with its point lights take this light on top; there are
+no shadows, and with multisampling a lit pixel writes one colour to all its samples.
 
 **Glow and colour grading.** With `ForeverGlow=1` the DLL rewrites the glow byte the client hands the glow composite
 (see Glow feed) once per frame, before the fog composite, to `lerp(client byte/255, Forever glow, t)` with `t =
@@ -885,6 +904,7 @@ its comments describe every key. In the game, `Ctrl+F7` opens the same settings 
 | `LocalLights`, `LocalLightIntensity` | 1, 1 | Scatter up to eight world point lights in view; intensity 0..8 |
 | `LocalLightPhase` | 0.3 | Henyey–Greenstein g of every point light in the fog, −0.9..0.9 (a calibration) |
 | `SpellLights`, `SpellLightIntensity` | 1, 1 | Spell effects light the fog (needs `LocalLights=1`); intensity 0..8 |
+| `SurfaceLights` | 1 | The point and spell lights also light surfaces, 0..2 (needs `LocalLights=1`); 0 = off |
 | `LightsFollowObjects` | 1 | A light in view whose object the client stopped drawing fades out with it |
 | `InteriorAware`, `InteriorDensity` | 1, 0.15 | Fade outdoor layers indoors, keeping this fraction of their density |
 | `InteriorFarFog` | 1.0 | Native distance-fog density retained indoors (0..1); lower values clear dungeon haze |
