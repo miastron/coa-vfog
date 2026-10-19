@@ -1113,8 +1113,9 @@ Forever in the game, so by default colours still differ from Classic.
 - **Luca Foscili** added the interior distance-fog control and the Steam Deck and Proton notes upstream
   (pull requests #9 and #10).
 - **St0ny** and the AIO WoW EXE Patcher, whose patch No. 70 "lightstay" byte the `LightStay` setting reproduces.
-- **The wowdecomp project**, whose reconstruction of the 3.3.5a (build 12340) client the texture-filtering notes are
-  read from.
+- **The wowdecomp project** ([SatyPardus/wowdecomp](https://github.com/SatyPardus/wowdecomp)), by Saty and its
+  contributors: a C++ decompilation of the 3.3.5a (build 12340) client, which the texture-filtering notes are read
+  from.
 - **Claude**, the AI model by Anthropic, which wrote the code, shaders, harness checks and documentation of this
   fork's additions and fixes.
 - **Third-party code**: Dear ImGui (the settings window) and SMAA (Jimenez et al., the antialiasing), fetched at build
