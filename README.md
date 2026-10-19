@@ -11,7 +11,10 @@ wave spectra and foam textures.
 ## About this fork
 
 This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `st0ny-dev`) builds on
-[jealous-sound/coa-vfog](https://github.com/jealous-sound/coa-vfog) and fixes fog lights that flickered or went out:
+[jealous-sound/coa-vfog](https://github.com/jealous-sound/coa-vfog). Its additions and fixes are listed below; the
+sections that follow describe how each one works and what is checked or verified.
+
+**Fog lights that stay steady** (fixes to flickering and vanishing lights):
 
 - **LightStay** (`LightStay=1`, on by default) keeps the client from switching off a light whose model was not drawn,
   the same byte as patch No. 70 "lightstay" of St0ny's AIO WoW EXE Patcher.
@@ -22,20 +25,41 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
 - **Smooth swaps**: lights fade in and out over about a second when they take or give up a slot; a light entering
   from the edge of the view shines at once.
 - **Storm fog over water**: no more bright lines on grazing water in noisy fog near point lights.
-- **Shores and reflections**: the waterline washes in and out (`WaterShoreWaves`), shore foam has its own strength
-  (`WaterShoreFoam`) and looks the same from any camera angle, and sky reflections are fogged front to back so night
-  reflections are no brighter than the sky.
 - **Cheaper fog lights**: shorter light spheres and no second density sampling in the lit march.
+
+**More light** (new):
+
 - **Spell lights** (`SpellLights`): glowing spell effects light the fog around them in their particles' colour.
 - **Lights on surfaces** (`SurfaceLights`): the same point and spell lights also light the ground, walls and models
   around them, without shadows.
 - **Lights follow their objects** (`LightsFollowObjects`): a lamp or fire the game no longer draws in view, because
   it is beyond its object fade distance or hidden, takes its light with it.
+
+**Shadows** (new, or restored from upstream's cost cut):
+
 - **Light shafts are back** (`LightShafts`, `WorldShadows`): upstream removed them in its cost cut, and the sun or
   moon halo then shone through cliffs and terrain. They return in their own shaders with a quarter to half of
   their former trace work (see Light shafts).
-- **Releases**: every push to `st0ny-dev` builds the install zip and keeps only the newest build:
-  [CoAVolFog-Win32.zip](https://github.com/Raz0r1337/coa-vfog/releases/latest/download/CoAVolFog-Win32.zip).
+- **Terrain shadows** (part of `LightShafts`): hills, cliffs and mountains block the sun or moon in the fog even where
+  they lie outside the view, from the heights of the terrain the client has loaded around the camera.
+- **Shafts without stipple**: the temporal filter averages the current jittered sun-shadow samples where it drops
+  history, so the shafts do not sparkle when the sun light dominates.
+
+**Water and shores** (new):
+
+- **Shores and reflections**: the waterline washes in and out (`WaterShoreWaves`), shore foam has its own strength
+  (`WaterShoreFoam`) and looks the same from any camera angle, and sky reflections are fogged front to back so night
+  reflections are no brighter than the sky.
+
+**Image quality** (new, all in the world viewport):
+
+- **Anisotropic filtering** (`AnisotropicFiltering`, 16x by default): the game's Texture Filtering option never reaches
+  the ground, buildings and grass, so their mipmapped textures are filtered anisotropically here.
+- **Antialiasing, sharpening and bloom** (`Antialiasing`, `Sharpening`, `Bloom`): SMAA, a contrast-adaptive sharpen and
+  a bloom halo, all off by default.
+
+**Releases**: every push to `st0ny-dev` builds the install zip and keeps only the newest build:
+[CoAVolFog-Win32.zip](https://github.com/Raz0r1337/coa-vfog/releases/latest/download/CoAVolFog-Win32.zip).
 
 ## What it draws
 
@@ -48,8 +72,9 @@ This fork ([Raz0r1337/coa-vfog](https://github.com/Raz0r1337/coa-vfog), branch `
   too thin to hide the far clip.
 - **Forward scattering** around the visible sun or moon sprite (Henyey–Greenstein phase).
 - **Light shafts**: terrain, buildings, trees and characters block the sun or moon light in the fog, so the halo
-  shines only where the light reaches (`LightShafts`). The client's world shadow maps include casters outside the
-  view (`WorldShadows`); a trace through the image's depth covers what they do not.
+  shines only where the light reaches (`LightShafts`). Terrain blocks it from the client's loaded heights, in view
+  or not. The client's world shadow maps include casters outside the view (`WorldShadows`); a trace through the
+  image's depth covers what they do not.
 - **Local lights**: up to eight native point lights in view scatter into the medium with the client's constant,
   linear and quadratic attenuation. Light/ray intersections preserve small light volumes between march samples.
   Every light scatters with one shared phase (`LocalLightPhase`), and one brighter than 1 keeps its intensity.
@@ -98,11 +123,13 @@ Variants that sample authored noise run only while a Classic layer carries it.
 
 With `Temporal` above 0, samples vary between frames and a temporal filter accumulates them. It rejects history
 from a different surface depth or depth class (world, distant terrain, sky) and lowers its weight where animated
-lighting changes the radiance; settings, map, screen-effect slot, projection and large camera changes discard
-it. With `Temporal=0`, samples stay at fixed midpoints so a stationary frame does not shimmer, and the temporal
-passes are skipped.
-Where no history applies (a newly exposed surface, the screen edge while turning, the frame after a discard), the
-filter returns the average of the current samples in the 3×3 low-resolution neighbourhood on the pixel's surface.
+lighting changes the radiance, showing the average of the current samples on the pixel's surface in the 3×3
+low-resolution neighbourhood in place of the history it drops, so the jittered sun-shadow samples of the light shafts
+do not show as a stipple when the shadowed sun light dominates; settings, map, screen-effect slot, projection and large
+camera changes discard it. With `Temporal=0`, samples stay at fixed midpoints so a stationary frame does not shimmer,
+and the temporal passes are skipped. Where no history applies (a newly exposed surface, the screen edge while turning,
+the frame after a discard), the filter returns the average of the current samples in the 3×3 low-resolution
+neighbourhood on the pixel's surface.
 
 The full-resolution composite upsamples the march through depth-validated taps. Ground seen at a grazing angle
 is interpolated from the current frame's march where the taps lie on the pixel's plane, the march is linear
@@ -127,6 +154,21 @@ with the light behind it, depth silhouettes conservatively cover the hidden spac
 character cannot reveal sunlight through a mountain; sky rays keep a finite occluder thickness. The character map
 then darkens what it covers. Without the client's maps (`WorldShadows=0`, its shadows off, or an unrecognised image)
 the trace covers everything.
+
+**Terrain shadows.** With `LightShafts=1` the terrain blocks the sun or moon from its heights rather than from the
+image, so a hill or cliff outside the view or behind the camera still shades the fog. Each frame the renderer checks
+the loaded terrain chunks (see Terrain heights) in a window of 64×64 chunks, 512×512 outer vertices 4.17 yd apart and
+about 2133 yd across, centred on the camera's chunk. It moves the window once the camera is more than 8 chunks from
+its centre and reads a chunk's nine rows of nine outer vertices again when its address changes; unloaded chunks hold
+no terrain. From the heights and the direction to the visible sun or moon it computes each vertex's shadow height,
+the lowest a point above it can be and still see the light past the terrain, in one sweep from the light's side:
+`S = max(h, S' − d·tan e)`, with `S'` interpolated on the previous line one vertex closer to the light along the
+dominant axis, `d` the horizontal length of that step and `e` the light's elevation. It recomputes when the terrain
+changes or the light turns by more than about 0.1° and uploads the window as 512×512 `R32F`. A march sample takes
+the bilinear shadow height `S` at its world position and keeps `saturate(0.5 + (z + 1 − S) / 2)` of the light, z in
+yards; a sample outside the window keeps the light. This visibility multiplies that of the other occluders, and the
+image trace is skipped where the terrain already blocks the light. Only the outer vertices are kept, so a peak at a
+cell's centre vertex counts at the height its corners give, and holes cut into the terrain for caves still block.
 
 Every full-screen pass draws one triangle whose edges lie outside the viewport (NDC −1.5 and 4.5), so it covers every
 4x sample of the edge columns; Direct3D 9 maps NDC −1 onto the first column's centres.
@@ -479,7 +521,10 @@ Engine notes behind the code:
   The native direction comes from `[[0xCE04A8] + 0x7C]`, has its Z multiplied by five and capped at -1.2, and is
   normalized before storage at `0xD43180` (`0x7BB570`–`0x7BB628`). It points from the light into the world; volumetric
   direct scattering reverses it. This direction follows the client's surface-shadow lighting, not the visible
-  celestial sprite. The optional sprite-centred god rays remain a separate effect.
+  celestial sprite: `DayNight::SetDirection` `0x7EEA90` takes it from fixed tables, pointing along azimuth 225° with
+  a polar angle of 127° at midnight and noon and 110° at 06:00 and 18:00. After the Z scale and cap the maps are
+  therefore always cast from 52–56° above the horizon, from azimuth 45° where the sun and moon also stand
+  (`0x7EECC0`), whatever the sun's or moon's elevation. The optional sprite-centred god rays remain a separate effect.
   Texture handles are `[0xD43250 + 4*hardwareComparison]` and
   `[0xD43290 + 0x3C*cascade + 4*[0xD432C8 + 0x3C*cascade]]`, with hardware comparison selected by `[0xD43014]`.
   A texture resource holds its Gx texture at `+0x44`, or its cache at `+0x5C` holds the Gx texture at `+0x18`
@@ -491,6 +536,17 @@ Engine notes behind the code:
   Capture checks the image and relevant instruction bytes, the live formats and matrix values, and texture device
   ownership. It retains D3D references only for the fog draw, releases them on every exit, and falls back when the
   native maps are unavailable. These static contracts and offline tests do not establish in-game visual alignment.
+- Terrain heights. The terrain query of the shadow maps, `0x7BCF20`, reads the map's area table at `0xCE48D0`
+  (`0x7BCF9B 8B 04 85 D0 48 CE 00`) at `64·(row >> 4) + (col >> 4)`, the chunk row counted along world −X and the
+  column along −Y in 33.33 yd steps from 17066.67 yd. It skips an area whose asynchronous load at `+0x70` is set
+  (`0x7BCFAA 83 78 70 00`) and takes the chunk at `+0xBC + 4·(16·(row & 15) + (col & 15))`
+  (`0x7BCFC1 8B 84 B0 BC 00 00 00`). `CMapChunk::GetVertexPosition` `0x790520` places vertex `i` at the offsets of
+  `0xD25498` from the chunk's top-left corner at `+0x7C` (`0x790534 D8 41 7C`), its height `[+0x11C][i]` plus the
+  corner's Z (`0x79054C 8B 81 1C 01 00 00`). The vertex grid `0x7C3C60` lays out the 145 heights as nine rows of nine
+  outer vertices 4.17 yd apart, each row but the last followed by eight centre vertices, so outer vertex `(r, c)` is
+  index `17r + c` at `(−4.17r, −4.17c)` from the corner. The fog reads a chunk only when its corner lies at its row
+  and column. The shadow map render `0x7BBC50` draws WMO groups and M2 batches only; the terrain queries `0x7BCF20`
+  and `0x7BCC00` walk the chunks for the doodads on them, so the client's shadow maps hold no terrain.
 - Native glare. `0x4F9213` (`E8 58 76 2F 00`) calls the sun/moon glare pass `0x7F0870`, which is not patched.
   Its draw `0x9AC400` adds the `sunGlare`/`moonGlare` quads (`D3DBLEND_SRCALPHA`, `D3DBLEND_ONE`) at depth
   `[0.9990234375, 1]`, and its update `0x9AC3C0` runs a GPU occlusion query against the current world depth
@@ -802,7 +858,10 @@ performance. It writes `before.png`, `after.png`,
 `overlay.png` and the debug views to `build/harness-out`.
 
 Further suites check the authored noise and `ClassicPhase`, the transparent fog, glow and grading through the hooks,
-a 4x device (`SKIP` without a copy method), and the ripples.
+a 4x device (`SKIP` without a copy method), and the ripples. The sun-shadow suite checks the light shafts behind a wall
+and against the client's shadow maps, and the terrain-shadow suite checks the terrain window (its chunks, centre and
+map changes), the shadow height sweep against a wall and the march's visibility from the terrain heights. They
+establish the offline behaviour only, not the in-game look.
 
 `vfog_harness --scene harbour <dir> --data data/fogdata.bin` renders the logged in-game frame at the
 Stormwind harbour (sunset, far clip 791.6 yd) with ideal depth and with the client's depth range, and
@@ -871,6 +930,8 @@ The water line goes on with the ripples (`ripples 512 at 0.125 yd, 30 Hz, up to 
 The depth probe logs raw depth, distance and fog opacity at 25 points on frame 60, then every 60 s up to five
 times (every 30 s without limit at `LogLevel=2`); its rows are read back on a later frame. The first reason a
 fog draw is skipped is logged as `fog skipped: <reason>`; a camera under water is logged once as `fog idle`.
+With `LightShafts=1`, `terrain shadows: 4096 of 4096 chunks around the camera loaded on map 0` is logged when terrain
+appears around the camera, and the same line with 0 chunks when the last of it unloads.
 
 Each device creation and `Reset` logs the adapter, the sample count requested and used, the depth format bound,
 and the depth copy method with its self-test result or why multisampling is off. Guarded client bytes that differ
@@ -969,10 +1030,13 @@ Forever in the game, so by default colours still differ from Classic.
   https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-ps-3-0), and lower
   quality does not reduce that. An unsupported required shader disables volumetric fog for that device and logs
   its name, HRESULT and the shader caps; native fog remains the fallback.
-- Light shafts follow the client's shadow-light direction where its world shadow maps cover the ray, and the
-  visible sun or moon elsewhere; the two can differ. The screen-space trace cannot see blockers outside the view,
-  and its conservative treatment of depth silhouettes can darken fog where geometry hidden behind them would let
-  light through. Native shadow-map alignment in the game is unverified.
+- Terrain blocks the visible sun or moon from the loaded heights, in view or not, out to the window's edge 800 to
+  1333 yd from the camera; this is harness-checked only. Buildings, trees and characters outside the view block it
+  only through the client's world shadow maps, which are cast from 52–56° elevation whatever the sun's or moon's
+  (see Native world shadows), so under a low sun or moon they shade far less fog than they should, and with the
+  client's shadows off they do not block it at all. The screen-space trace cannot see blockers outside the view, and
+  its conservative treatment of depth silhouettes can darken fog where geometry hidden behind them would let light
+  through. Native shadow-map alignment in the game is unverified.
 - Local lighting captures the current M2 scene's point-light table. It does not create spotlight cones or local
   shadows, and coverage of WMO-only lights is unverified. A light's sphere ends where its falloff leaves 1/64 of its
   peak (1/256 before; in the harness benchmark, eight 130 yd lights shrink to 65 yd and the frame changes by at most 1
@@ -1040,6 +1104,21 @@ Forever in the game, so by default colours still differ from Classic.
 - The client's footstep spray (`0x723A50`) is not hooked, and game objects such as boats make no ripples.
 - The zone lights' edge fade distance is chosen here: their `TransitionType` is 0 in every row and the modern
   client's transition rule is not known.
+
+## Credits
+
+- **jealous-sound** wrote the CoAVolFog this fork builds on: the volumetric fog and light shafts, the Classic fog
+  data, the modern water, the settings window and the release build
+  ([jealous-sound/coa-vfog](https://github.com/jealous-sound/coa-vfog)).
+- **Luca Foscili** added the interior distance-fog control and the Steam Deck and Proton notes upstream
+  (pull requests #9 and #10).
+- **St0ny** and the AIO WoW EXE Patcher, whose patch No. 70 "lightstay" byte the `LightStay` setting reproduces.
+- **The wowdecomp project**, whose reconstruction of the 3.3.5a (build 12340) client the texture-filtering notes are
+  read from.
+- **Claude**, the AI model by Anthropic, which wrote the code, shaders, harness checks and documentation of this
+  fork's additions and fixes.
+- **Third-party code**: Dear ImGui (the settings window) and SMAA (Jimenez et al., the antialiasing), fetched at build
+  time as described under Build; the sharpening follows AMD FidelityFX CAS.
 
 ## License
 
